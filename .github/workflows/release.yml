@@ -14,6 +14,8 @@ jobs:
       contents: write
       packages: write
     runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -32,10 +34,13 @@ jobs:
       - name: Cache Gradle
         uses: burrunan/gradle-cache-action@v3
 
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew build clean
+        run: ./gradlew clean :patches:buildAndroid generatePatchesFiles
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -46,14 +51,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
+      - name: Upload Patches Artifact
+        uses: actions/upload-artifact@v4
         with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-          fingerprint: ${{ env.GPG_FINGERPRINT }}
-
-      - name: Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm exec semantic-release
+          name: revanced-patches-output
+          # Dùng ký tự ** để quét file .jar và .rvp ở mọi thư mục con, tránh việc sai lệch đường dẫn
+          path: |
+            **/*.rvp
