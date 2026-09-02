@@ -40,7 +40,7 @@ jobs:
       - name: Build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ./gradlew clean :patches:buildAndroid generatePatchesFiles
+        run: ./gradlew clean :patches:buildAndroid
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
