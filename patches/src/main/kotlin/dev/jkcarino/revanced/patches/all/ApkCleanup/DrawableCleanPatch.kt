@@ -1,7 +1,7 @@
 package dev.jkcarino.revanced.patches.all.apkcleanup
 
 import app.revanced.patcher.patch.resourcePatch
-import app.revanced.patcher.patch.stringOption
+import app.revanced.patcher.patch.stringsOption
 import java.io.File
 
 private val DENSITIES = listOf("ldpi", "mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi")
@@ -20,17 +20,22 @@ private fun groupedDensityDirs(resDir: File, prefix: String): Map<String, Mutabl
     return groups
 }
 
-private fun dedupeByBaselineDensity(resDir: File, prefix: String, baseline: String, extensions: Set<String>) {
+private fun dedupeByBaselineDensities(resDir: File, prefix: String, baselines: List<String>, extensions: Set<String>) {
     groupedDensityDirs(resDir, prefix).values.forEach { densityMap ->
-        val baselineDir = densityMap[baseline] ?: return@forEach
-        val baselineNames = baselineDir.walkTopDown()
-            .filter { it.isFile && it.extension.lowercase() in extensions }
-            .map { it.name }
-            .toSet()
+        // 1. Gom tất cả tên file có trong các thư mục bác muốn giữ
+        val baselineNames = mutableSetOf<String>()
+        baselines.forEach { baseline ->
+            densityMap[baseline]?.walkTopDown()
+                ?.filter { it.isFile && it.extension.lowercase() in extensions }
+                ?.map { it.name }
+                ?.let { baselineNames.addAll(it) }
+        }
+
         if (baselineNames.isEmpty()) return@forEach
 
+        // 2. Đi dò các thư mục khác, không nằm trong danh sách giữ thì đem ra trảm
         densityMap.forEach { (density, dir) ->
-            if (density == baseline) return@forEach
+            if (density in baselines) return@forEach // Né các thư mục mục tiêu ra
             dir.walkTopDown()
                 .filter { it.isFile && it.extension.lowercase() in extensions && it.name in baselineNames }
                 .forEach { it.delete() }
@@ -41,23 +46,29 @@ private fun dedupeByBaselineDensity(resDir: File, prefix: String, baseline: Stri
 // DrawableCleanPatch.kt
 val drawableCleanPatch = resourcePatch(
     name = "Remove Duplicate Graphics",
-    description = "Keeps images for only one screen density (like xhdpi) and removes copies for all other densities. Android will automatically scale the kept images, making the app significantly smaller.",
+    description = "Keeps images for selected screen densities (e.g. xhdpi, xxhdpi) and removes copies for all other densities.",
     use = false,
 ) {
-    val targetDensity by stringOption(
-        key = "targetDensity",
-        default = "xhdpi",
-        values = DENSITIES.associateWith { it },
-        title = "Target density",
-        description = "Density bucket to keep; duplicates are stripped from every other bucket.",
+    // Đổi thành stringsOption (có s) và đổi tên biến cho chuẩn
+    val targetDensities by stringsOption(
+        key = "targetDensity", // Giữ nguyên key này để cmd cũ của bác vẫn chạy được
+        default = null,
+        title = "Target densities",
+        description = "Density buckets to keep; duplicates are stripped from every other bucket.",
     )
 
     execute {
         val resDir = get("res", false)
-        val baseline = targetDensity?.takeIf { it in DENSITIES } ?: "xxhdpi"
+        
+        // Xử lý chuỗi từ CLI: Lọc bỏ ngoặc, ngoặc kép, khoảng trắng rồi tách bằng dấu phẩy
+        val baselines = (targetDensities ?: emptyList())
+            .flatMap { it.replace("[", "").replace("]", "").replace("\"", "").split(",") }
+            .map { it.trim().lowercase() }
+            .filter { it in DENSITIES }
+            .takeIf { it.isNotEmpty() } ?: listOf("xxhdpi") // Nếu lỗi thì tự fallback về xxhdpi
 
-        dedupeByBaselineDensity(resDir, "drawable", baseline, DRAWABLE_EXTENSIONS)
-        dedupeByBaselineDensity(resDir, "mipmap", baseline, MIPMAP_EXTENSIONS)
+        dedupeByBaselineDensities(resDir, "drawable", baselines, DRAWABLE_EXTENSIONS)
+        dedupeByBaselineDensities(resDir, "mipmap", baselines, MIPMAP_EXTENSIONS)
 
         resDir.walkBottomUp()
             .filter { it.isDirectory && it.listFiles()?.isEmpty() == true }
