@@ -172,7 +172,7 @@ private fun optimizePng(original: ByteArray): OptimizeResult {
 val pngOptimizerPatch = resourcePatch(
     name = "Png Optimizer",
     description = "Compresses PNG images without losing quality and strips hidden metadata (DPI, timestamps, text) to make the app smaller. Only rewrites files when the result is actually smaller.",
-    default = false,
+    use = false,
 ) {
     execute {
         val roots = listOf("res", "assets")
