@@ -65,7 +65,7 @@ val drawableCleanPatch = resourcePatch(
             .flatMap { it.replace("[", "").replace("]", "").replace("\"", "").split(",") }
             .map { it.trim().lowercase() }
             .filter { it in DENSITIES }
-            .takeIf { it.isNotEmpty() } ?: listOf("xxhdpi") // Nếu lỗi thì tự fallback về xxhdpi
+            .takeIf { it.isNotEmpty() } ?: listOf("xhdpi") // Nếu lỗi thì tự fallback về xhdpi
 
         dedupeByBaselineDensities(resDir, "drawable", baselines, DRAWABLE_EXTENSIONS)
         dedupeByBaselineDensities(resDir, "mipmap", baselines, MIPMAP_EXTENSIONS)
