@@ -23,7 +23,7 @@ val toggleFeatureFlagsPatch = bytecodePatch(
 
     val featureFlags by stringsOption(
         key = "featureFlags",
-        default = null,
+        default = listOf("brella", "brella_clearcut_log", "enable_training_cache_metrics_processors", "enable_number_row"),
         title = "Feature flags",
         description = "The Gboard feature flags to toggle, such as experimental or hidden features.",
         required = true
