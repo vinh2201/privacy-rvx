@@ -23,7 +23,7 @@ val toggleFeatureFlagsPatch = bytecodePatch(
     // Option 1: Danh sách các cờ muốn BẬT (Kế thừa list mặc định cũ)
     val flagsToEnable by stringsOption(
         key = "flagsToEnable",
-        default = listOf("enable_number_row", "enable_settings_search", "enable_extended_clipboard_history", "require_device_idle_for_content_cache_download", "disable_refresh_in_result_page_emoji_kitchen_browse_search", "enable_clean_top_bar_not_used_for_long_time"),
+        default = listOf("enable_number_row", "enable_settings_search", "enable_extended_clipboard_history", "require_device_idle_for_content_cache_download", "disable_refresh_in_result_page_emoji_kitchen_browse_search", "enable_clean_top_bar_not_used_for_long_time", "more_pill_keys", "undo_access_point"),
         title = "Flags to Enable",
         description = "List of Gboard feature flags to forcefully ENABLE.",
         required = false // Đổi thành false để không bắt buộc phải nhập nếu chỉ muốn tắt
