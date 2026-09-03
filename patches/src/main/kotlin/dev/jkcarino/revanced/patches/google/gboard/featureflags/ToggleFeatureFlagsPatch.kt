@@ -35,7 +35,7 @@ val toggleFeatureFlagsPatch = bytecodePatch(
     // Option 2: Danh sách các cờ muốn TẮT (Mặc định để trống)
     val flagsToDisable by stringsOption(
         key = "flagsToDisable",
-        default = listOf("brella", "brella_clearcut_log", "enable_training_cache_metrics_processors", "enable_split_layout_promo", "enable_full_width_layout_promo", "nga_enable_data_collection_banner", "enable_conversation_id_in_training_cache", "enable_chinese_training_cache", "enable_perfetto_trigger", "access_point_feature_promote_banner", "access_points_customization_banner", "agentic_dictation_promo_banner", "agentic_dictation_enable_promo_banner", "apostrophe_behavior_promo_banner", "auto_translate_banner"),
+        default = listOf("brella", "brella_clearcut_log", "enable_training_cache_metrics_processors", "enable_split_layout_promo", "enable_full_width_layout_promo", "nga_enable_data_collection_banner", "enable_conversation_id_in_training_cache", "enable_chinese_training_cache", "enable_perfetto_trigger", "access_point_feature_promote_banner", "access_points_customization_banner", "agentic_dictation_promo_banner", "agentic_dictation_enable_promo_banner", "apostrophe_behavior_promo_banner", "auto_translate_banner", "enable_hmm_on_device_logging", "enable_biasing_metrics_logging", "log_spell_checker_metrics_v2", "log_spell_checker_suggestion_language", "enable_crowdsource_integration", "enable_data_share_service", "enable_voice_donation_flow", "enable_backup_delight5_personalized_data"),
         title = "Flags to Disable",
         description = "List of Gboard feature flags to forcefully DISABLE.",
         required = false
