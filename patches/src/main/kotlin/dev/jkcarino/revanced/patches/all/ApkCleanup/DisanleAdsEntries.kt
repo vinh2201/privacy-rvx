@@ -7,7 +7,7 @@ import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction10x
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction11n
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction11x
-import com.android.tools.smali.dexlib2.mutable.MutableMethod
+import com.android.tools.smali.dexlib2.immutable.ImmutableMethod
 import org.w3c.dom.Element
 
 @Suppress("unused")
@@ -137,21 +137,23 @@ val disableAdSdkCallsPatch = bytecodePatch(
         classes.forEach { classDef ->
             if (adPackages.none { classDef.type.startsWith(it) }) return@forEach
 
-            classDef.methods.forEach methodLoop@{ method ->
-                if (method.name in setOf("<init>", "<clinit>")) return@methodLoop
+            val methodsList = classDef.methods as? MutableList<com.android.tools.smali.dexlib2.iface.Method> ?: return@forEach
 
-                val implementation = method.implementation ?: return@methodLoop
+            for (i in methodsList.indices) {
+                val method = methodsList[i]
+                if (method.name in setOf("<init>", "<clinit>")) continue
+
+                val implementation = method.implementation ?: continue
 
                 val isVoid = method.name in voidMethodNames && method.returnType == "V"
                 val isObject = method.name in objectMethodNames && method.returnType.startsWith("L")
                 val isBool = method.name in setOf("isInitSuccess", "isSdkReady") && method.returnType == "Z"
 
-                if (!isVoid && !isObject && !isBool) return@methodLoop
+                if (!isVoid && !isObject && !isBool) continue
 
                 val newRegCount = if (isVoid) implementation.registerCount else maxOf(1, implementation.registerCount)
 
-                val mutableMethod = method as? MutableMethod ?: return@methodLoop
-                mutableMethod.implementation = MutableMethodImplementation(newRegCount).apply {
+                val newImplementation = MutableMethodImplementation(newRegCount).apply {
                     if (isVoid) {
                         instructions.add(BuilderInstruction10x(Opcode.RETURN_VOID))
                     } else if (isObject) {
@@ -162,6 +164,16 @@ val disableAdSdkCallsPatch = bytecodePatch(
                         instructions.add(BuilderInstruction11x(Opcode.RETURN, 0))
                     }
                 }
+
+                methodsList[i] = ImmutableMethod(
+                    method.definingClass,
+                    method.name,
+                    method.parameters,
+                    method.returnType,
+                    method.accessFlags,
+                    method.annotations,
+                    newImplementation
+                )
             }
         }
     }
