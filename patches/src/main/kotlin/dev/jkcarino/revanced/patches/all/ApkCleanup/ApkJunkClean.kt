@@ -69,6 +69,7 @@ val apkCleanupPatch = rawResourcePatch(
     )
 
     val targetArch by stringOption(
+        key = "targetArch",
         default = "armeabi-v7a",
         values = mapOf(
             "arm64-v8a" to "ARM64 (arm64-v8a)",
@@ -76,7 +77,7 @@ val apkCleanupPatch = rawResourcePatch(
             "x86" to "x86",
             "x86_64" to "x86_64",
         ),
-        name = "Target architecture",
+        title = "Target architecture",
         description = "Which architecture to keep when splitting is enabled.",
     )
 
@@ -94,27 +95,28 @@ val apkCleanupPatch = rawResourcePatch(
             if (entry.isDirectory) {
                 val children = entry.list()
                 val preview = children?.take(5)?.joinToString()
-                // Giảm bớt log info cho đỡ rối, hoặc bác giữ nguyên cũng được
+                logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
                 children?.forEach { child -> removeTree("$path/$child") }
-                
-                // Tiện tay dọn luôn vỏ thư mục rỗng vật lý (repacker không quan tâm cái này lắm)
-                entry.delete() 
             } else if (entry.isFile) {
                 if (isProtected(path)) return
                 val size = entry.length()
                 
+                // Báo cáo Patcher gạch tên file này trước khi xóa vật lý
                 try {
-                    // DÙNG API delete(path) CỦA REVANCED ĐỂ GẠCH TÊN FILE KHỎI REPACKER
                     delete(path)
-                    
+                } catch (e: Exception) {
+                    // Bỏ qua nếu Patcher không tìm thấy path này trong danh mục quản lý
+                }
+
+                if (entry.delete()) {
                     removedFiles++
                     freedBytes += size
                     logger.fine("Removed: $path (${size}B)")
-                } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path. Error: ${e.message}")
+                } else {
+                    logger.warning("APK Cleanup: failed to delete $path")
                 }
             } else {
-                logger.fine("APK Cleanup: $path -> neither file nor directory")
+                logger.info("APK Cleanup: $path -> neither file nor directory")
             }
         }
 
@@ -131,14 +133,15 @@ val apkCleanupPatch = rawResourcePatch(
                     val size = file.length()
                     
                     try {
-                        // SỬ DỤNG API delete TƯƠNG TỰ BÊN TRÊN
                         delete(relativePath)
-                        
+                    } catch (e: Exception) {
+                        // Bỏ qua lỗi API
+                    }
+
+                    if (file.delete()) {
                         removedFiles++
                         freedBytes += size
                         logger.fine("Removed file: $relativePath (${size}B)")
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to remove file $relativePath")
                     }
                 }
             }
@@ -177,7 +180,6 @@ val apkCleanupPatch = rawResourcePatch(
             logger.severe("APK Cleanup: failed scanning META-INF/: ${e.message}")
         }
 
-        // Quét ngược để dọn dẹp các thư mục rỗng vật lý còn sót lại (không ảnh hưởng tới repacker)
         apkRoot.walkBottomUp()
             .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
             .forEach { it.delete() }
@@ -193,7 +195,6 @@ val apkCleanupPatch = rawResourcePatch(
                 if (hasTarget) {
                     archNames.filter { it != archToKeep }.forEach { arch ->
                         try {
-                            // Hàm removeTree giờ đã dùng API delete() nên sẽ hoạt động hoàn hảo cho lib/
                             removeTree("lib/$arch")
                         } catch (e: Exception) {
                             logger.severe("APK Cleanup: failed removing lib/$arch/: ${e.message}")
