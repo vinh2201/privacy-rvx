@@ -132,7 +132,7 @@ val disableAdSdkCallsPatch = bytecodePatch(
             "getFeedView",
         )
 
-        context.classes.forEach { classDef ->
+        classes.forEach { classDef ->
             if (adPackages.none { classDef.type.startsWith(it) }) return@forEach
 
             classDef.methods.forEach methodLoop@{ method ->
