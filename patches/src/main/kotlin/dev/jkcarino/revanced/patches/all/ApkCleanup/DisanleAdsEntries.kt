@@ -3,6 +3,7 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.bytecodePatch
 import app.revanced.patcher.patch.resourcePatch
 import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction10x
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction11n
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction11x
@@ -146,18 +147,18 @@ val disableAdSdkCallsPatch = bytecodePatch(
 
                 if (!isVoid && !isObject && !isBool) return@methodLoop
 
-                if (!isVoid && implementation.registerCount < 1) {
-                    implementation.registerCount = 1
-                }
+                val newRegCount = if (isVoid) implementation.registerCount else maxOf(1, implementation.registerCount)
 
-                if (isVoid) {
-                    implementation.instructions.add(0, BuilderInstruction10x(Opcode.RETURN_VOID))
-                } else if (isObject) {
-                    implementation.instructions.add(0, BuilderInstruction11n(Opcode.CONST_4, 0, 0))
-                    implementation.instructions.add(1, BuilderInstruction11x(Opcode.RETURN_OBJECT, 0))
-                } else if (isBool) {
-                    implementation.instructions.add(0, BuilderInstruction11n(Opcode.CONST_4, 0, 0))
-                    implementation.instructions.add(1, BuilderInstruction11x(Opcode.RETURN, 0))
+                method.implementation = MutableMethodImplementation(newRegCount).apply {
+                    if (isVoid) {
+                        instructions.add(BuilderInstruction10x(Opcode.RETURN_VOID))
+                    } else if (isObject) {
+                        instructions.add(BuilderInstruction11n(Opcode.CONST_4, 0, 0))
+                        instructions.add(BuilderInstruction11x(Opcode.RETURN_OBJECT, 0))
+                    } else if (isBool) {
+                        instructions.add(BuilderInstruction11n(Opcode.CONST_4, 0, 0))
+                        instructions.add(BuilderInstruction11x(Opcode.RETURN, 0))
+                    }
                 }
             }
         }
