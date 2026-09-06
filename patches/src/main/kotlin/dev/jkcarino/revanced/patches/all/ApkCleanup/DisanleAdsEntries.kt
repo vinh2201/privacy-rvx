@@ -1,4 +1,4 @@
-package dev.jkcarino.revanced.patches.all.apkcleanup // Đổi tên package theo project ReVanced của bạn
+package dev.jkcarino.revanced.patches.all.apkcleanup
 
 import app.revanced.patcher.data.AndroidManifestContext
 import app.revanced.patcher.data.BytecodeContext
@@ -23,7 +23,7 @@ object RemoveAdManifestEntriesPatch = androidManifestPatch(
             "android.permission.ACCESS_ADSERVICES_AD_ID",
             "android.permission.ACCESS_ADSERVICES_TOPICS",
             "android.permission.ACCESS_ADSERVICES_CUSTOM_AUDIENCE",
-            "android.permission.AD_SERVICES_CONFIG",
+            "android.permission.AD_SERVICES_CONFIG"
         )
         val adNames = listOf(
             "com.google.android.gms.ads",
@@ -53,7 +53,7 @@ object RemoveAdManifestEntriesPatch = androidManifestPatch(
             "com.kwad.sdk",
             "com.sigmob",
             "com.tradplus",
-            "com.pangle",
+            "com.pangle"
         )
 
         for (tag in listOf("uses-permission", "uses-library", "property", "meta-data", "provider", "service", "receiver", "activity")) {
@@ -101,7 +101,7 @@ object DisableAdSdkCallsPatch = bytecodePatch(
             "Lcom/baidu/mobads/",
             "Lcom/kwad/sdk/",
             "Lcom/sigmob/",
-            "Lcom/pangle/",
+            "Lcom/pangle/"
         )
         val voidMethodNames = setOf(
             "loadAd", "loadAds", "load", "show", "showAd", "fetchAd", "init", "start",
@@ -132,7 +132,6 @@ object DisableAdSdkCallsPatch = bytecodePatch(
 
                 if (!isVoid && !isObject && !isBool) return@methodLoop
 
-                // Đảm bảo method có ít nhất 1 register để return v0 không bị văng Exception
                 if (!isVoid && implementation.registerCount < 1) {
                     implementation.registerCount = 1
                 }
@@ -144,7 +143,7 @@ object DisableAdSdkCallsPatch = bytecodePatch(
                     implementation.instructions.add(1, BuilderInstruction11x(Opcode.RETURN_OBJECT, 0))
                 } else if (isBool) {
                     implementation.instructions.add(0, BuilderInstruction11n(Opcode.CONST_4, 0, 0))
-                    implementation.instructions.add(1, BuilderInstruction11x(Opcode.RETURN, 0))
+                    implementation.instructions.add(1, BuilderInstruction11x(OpCode.RETURN, 0))
                 }
             }
         }
