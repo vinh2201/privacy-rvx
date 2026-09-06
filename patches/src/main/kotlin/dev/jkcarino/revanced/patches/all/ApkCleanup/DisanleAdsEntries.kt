@@ -1,4 +1,4 @@
-package dev.revanced.patches.ads // Đổi tên package theo project ReVanced của bạn
+package dev.jkcarino.revanced.patches.all.apkcleanup // Đổi tên package theo project ReVanced của bạn
 
 import app.revanced.patcher.data.AndroidManifestContext
 import app.revanced.patcher.data.BytecodeContext
