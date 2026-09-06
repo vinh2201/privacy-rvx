@@ -7,6 +7,7 @@ import com.android.tools.smali.dexlib2.builder.MutableMethodImplementation
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction10x
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction11n
 import com.android.tools.smali.dexlib2.builder.instruction.BuilderInstruction11x
+import com.android.tools.smali.dexlib2.mutable.MutableMethod
 import org.w3c.dom.Element
 
 @Suppress("unused")
@@ -149,7 +150,8 @@ val disableAdSdkCallsPatch = bytecodePatch(
 
                 val newRegCount = if (isVoid) implementation.registerCount else maxOf(1, implementation.registerCount)
 
-                method.implementation = MutableMethodImplementation(newRegCount).apply {
+                val mutableMethod = method as? MutableMethod ?: return@methodLoop
+                mutableMethod.implementation = MutableMethodImplementation(newRegCount).apply {
                     if (isVoid) {
                         instructions.add(BuilderInstruction10x(Opcode.RETURN_VOID))
                     } else if (isObject) {
