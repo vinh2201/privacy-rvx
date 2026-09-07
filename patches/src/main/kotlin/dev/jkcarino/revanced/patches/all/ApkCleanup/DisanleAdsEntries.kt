@@ -172,6 +172,7 @@ val disableAdSdkCallsPatch = bytecodePatch(
                     method.returnType,
                     method.accessFlags,
                     method.annotations,
+                    method.hiddenApiRestrictions,
                     newImplementation
                 )
             }
