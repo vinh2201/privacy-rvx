@@ -97,9 +97,8 @@ val apkCleanupPatch = rawResourcePatch(
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
         try {
-            // MẤU CHỐT LÀ ĐÂY: Quét danh sách file từ tận bên trong bộ nhớ của Patcher!
-            // Lấy toàn bộ keys (đường dẫn) mà Patcher đang quản lý
-            val allVirtualFiles = this.apk.files.keys.toList()
+            // Lấy trực tiếp danh sách file từ context của RawResourcePatchContext
+            val allVirtualFiles = files.keys.toList()
 
             allVirtualFiles.forEach { rawPath ->
                 val relativePath = rawPath.replace("\\", "/").removePrefix("unknown/").removePrefix("original/")
@@ -119,7 +118,6 @@ val apkCleanupPatch = rawResourcePatch(
 
                 if (shouldDelete) {
                     try {
-                        // Trảm ngay lập tức bằng lệnh delete của Patcher
                         delete(rawPath)
                         removedFiles++
                         logger.fine("Vaporized from memory: $rawPath")
@@ -129,11 +127,10 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
 
-            // Xử lý tách kiến trúc CPU (Quét trong bộ nhớ thay vì ổ cứng)
+            // Xử lý tách kiến trúc CPU trực tiếp trên bộ nhớ ảo
             if (splitByArch == true) {
                 val archToKeep = targetArch ?: "armeabi-v7a"
                 
-                // Lọc tất cả các file nằm trong thư mục lib/
                 val libFiles = allVirtualFiles.filter { it.startsWith("lib/") }
                 
                 libFiles.forEach { libPath ->
