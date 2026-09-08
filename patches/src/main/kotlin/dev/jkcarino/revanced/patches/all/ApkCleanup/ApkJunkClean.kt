@@ -3,7 +3,6 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
-import java.io.File
 import java.util.logging.Logger
 
 private val logger = Logger.getLogger("ApkCleanupPatch")
@@ -59,16 +58,15 @@ private val JUNK_DIRECTORY_PREFIXES = listOf(
     "assets/dexopt/",
     "com/clevertap/",
     "org/jacoco/",
-    "org/joda/",
-    "services/",
-    "okhttp3/",
+    // Đã gỡ "org/joda/" để tránh làm mù hệ thống thời gian/timezone của app
+    // Đã gỡ "okhttp3/" và "services/" để không ảnh hưởng network & service loader nội bộ
 )
 
 private val EXCLUDED_PREFIXES = listOf("res/")
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
-    description = "Surgically removes junk directly from Patcher's virtual memory.",
+    description = "Surgically removes junk directly from Patcher's virtual memory without destroying dependencies.",
     use = false,
 ) {
     val splitByArch by booleanOption(
@@ -97,7 +95,6 @@ val apkCleanupPatch = rawResourcePatch(
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
         try {
-            // Lấy trực tiếp danh sách file từ context của RawResourcePatchContext
             val allVirtualFiles = files.keys.toList()
 
             allVirtualFiles.forEach { rawPath ->
@@ -112,7 +109,7 @@ val apkCleanupPatch = rawResourcePatch(
                     relativePath == "kotlin" || relativePath.startsWith("kotlin/") -> true
                     relativePath == "assets/audience_network.dex" ||
                         relativePath.startsWith("assets/audience_network/") -> true
-                    relativePath.startsWith("META-INF/") -> true
+                    // Đã bỏ dòng quét vơ vét META-INF/ ở đây để giữ lại các file hệ thống quan trọng
                     else -> false
                 }
 
@@ -121,16 +118,12 @@ val apkCleanupPatch = rawResourcePatch(
                         delete(rawPath)
                         removedFiles++
                         logger.fine("Vaporized from memory: $rawPath")
-                    } catch (e: Exception) {
-                        // Bỏ qua nếu có lỗi xóa
-                    }
+                    } catch (_: Exception) {}
                 }
             }
 
-            // Xử lý tách kiến trúc CPU trực tiếp trên bộ nhớ ảo
             if (splitByArch == true) {
                 val archToKeep = targetArch ?: "armeabi-v7a"
-                
                 val libFiles = allVirtualFiles.filter { it.startsWith("lib/") }
                 
                 libFiles.forEach { libPath ->
