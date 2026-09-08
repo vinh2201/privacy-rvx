@@ -116,7 +116,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Gom tất cả file rác ở thư mục root đi qua removeTree để Patcher nhận diện và bốc hơi chuẩn xác
+        // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
@@ -129,12 +129,15 @@ val apkCleanupPatch = rawResourcePatch(
                 if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
                     try {
-                        removeTree(relativePath)
-                        file.delete() // Dọn sạch dấu vết vật lý trên đĩa
-                        freedBytes += size
-                        logger.fine("Removed root file: $relativePath (${size}B)")
+                        if (file.delete()) {
+                            removedFiles++
+                            freedBytes += size
+                            logger.fine("Removed root/junk file: $relativePath (${size}B)")
+                        } else {
+                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
+                        }
                     } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to remove root file $relativePath: ${e.message}")
+                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
                     }
                 }
             }
