@@ -8,12 +8,6 @@ import java.util.logging.Logger
 
 private val logger = Logger.getLogger("ApkCleanupPatch")
 
-// Các file tối thượng ở root tuyệt đối không được đụng vào
-private val PROTECTED_ROOT_FILES = setOf(
-    "AndroidManifest.xml",
-    "resources.arsc"
-)
-
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
     Regex(""".*META-INF/services/.*"""),
@@ -24,7 +18,17 @@ private val PROTECTED_PATTERNS = listOf(
 )
 
 private val JUNK_PATTERNS = listOf(
-    Regex(""".*\.properties$"""), // Diệt sạch mọi file .properties ở mọi ngóc ngách
+    Regex(""".*play-services-.*\.properties$"""),
+    Regex(""".*firebase-.*\.properties$"""),
+    Regex(""".*app-update\.properties$"""),
+    Regex(""".*billing\.properties$"""),
+    Regex(""".*billing-ktx\.properties$"""),
+    Regex(""".*review\.properties$"""),
+    Regex(""".*hsdp\.properties$"""),
+    Regex(""".*core-common\.properties$"""),
+    Regex(""".*user-messaging-platform\.properties$"""),
+    Regex(""".*feature-delivery.*\.properties$"""),
+    Regex(""".*ads-mobile-sdk\.properties$"""),
     Regex(""".*\.proto$"""),
     Regex(""".*DebugProbesKt\.bin$"""),
     Regex(""".*\.version$"""),
@@ -38,29 +42,34 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*META-INF/NOTICE.*"""),
     Regex(""".*META-INF/LICENSE.*"""),
     Regex(""".*(?:^|/)LICENSES$"""),
+    Regex(""".*ion-java\.properties$"""),
     Regex(""".*THIRD-PARTY-NOTICES\.txt$"""),
     Regex(""".*licenses\.md$"""),
     Regex(""".*debug\.keystore$"""),
     Regex(""".*_trackers\.xml$"""),
+    Regex(""".*version\.properties$"""),
+    Regex(""".*integrity\.properties$"""),
+    Regex(""".*androidannotations-api\.properties$"""),
+    Regex(""".*transport-.*\.properties$"""),
     Regex(""".*jetty-dir\.css$"""),
-    // ART baseline profiles
-    Regex(""".*(?:^|/)baseline\.profm?$"""),
+    Regex(""".*(?:^|/)baseline\.profm?$""")
 )
 
-// Các tên thư mục rác (có thể nằm ở root hoặc bất cứ đâu trong workspace)
-private val JUNK_DIRECTORY_NAMES = listOf(
-    "dexopt",
-    "audience_network",
-    "clevertap",
-    "jacoco",
-    "joda",
-    "services",
-    "kotlin"
+private val JUNK_DIRECTORY_PREFIXES = listOf(
+    "assets/dexopt/",
+    "com/clevertap/",
+    "org/jacoco/",
+    "org/joda/",
+    "kotlin/",
+    "assets/audience_network/",
+    "META-INF/"
 )
+
+private val EXCLUDED_PREFIXES = listOf("assets/", "res/")
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
-    description = "Removes junk and useless files with no runtime purpose inside apk workspace.",
+    description = "Removes junk and useless files with no runtime purpose inside apk.",
     use = false,
 ) {
     val splitByArch by booleanOption(
@@ -84,119 +93,55 @@ val apkCleanupPatch = rawResourcePatch(
     )
 
     execute {
+        val manifestFile = get("AndroidManifest.xml")
+        val apkRoot = manifestFile.parentFile ?: File(".")
+
         var removedFiles = 0
         var freedBytes = 0L
 
-        // Gốc workspace chính là thư mục hiện tại mà ReVanced CLI đang bung APK ra
-        val apkRoot = File(".")
-        logger.info("APK Cleanup workspace root: ${apkRoot.absolutePath}")
+        fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        fun isProtected(relativePath: String): Boolean {
-            if (PROTECTED_ROOT_FILES.contains(relativePath)) return true
-            return PROTECTED_PATTERNS.any { it.matches(relativePath) }
-        }
+        apkRoot.walkTopDown().filter { it.isFile }.forEach { file ->
+            val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
 
-        // 1. Quét toàn bộ workspace từ trên xuống
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+            if (isProtected(relativePath)) return@forEach
+            
+            // Bỏ qua assets/ và res/ trừ khi thuộc danh sách thư mục rác chỉ định
+            if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) } && 
+                !JUNK_DIRECTORY_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                if (isProtected(relativePath)) return@forEach
-                if (relativePath.startsWith("res/")) return@forEach // Giữ nguyên res/
-
-                val isAtRoot = !relativePath.contains("/")
-                
-                val shouldDelete = when {
-                    // Xử lý các file rác nằm chành ành ngay root
-                    isAtRoot && !PROTECTED_ROOT_FILES.contains(relativePath) && (
-                        relativePath.endsWith(".properties") ||
-                        relativePath.endsWith(".txt") ||
-                        relativePath.endsWith(".xml") ||
-                        relativePath.endsWith(".json") ||
-                        relativePath.endsWith(".bin") ||
-                        relativePath.endsWith(".version")
-                    ) -> true
-
-                    // Xử lý theo regex rác chung
-                    JUNK_PATTERNS.any { it.matches(relativePath) } -> true
-
-                    // Xử lý các thư mục rác (dù nằm ở root hay trong assets/ đều dính đòn)
-                    JUNK_DIRECTORY_NAMES.any { junkDir ->
-                        relativePath == junkDir || 
-                        relativePath.startsWith("$junkDir/") || 
-                        relativePath.contains("/$junkDir/")
-                    } -> true
-
-                    relativePath.startsWith("META-INF/") -> true
-                    else -> false
-                }
-
-                if (shouldDelete) {
-                    val size = file.length()
-                    if (file.delete()) {
+            // Xử lý lọc kiến trúc CPU
+            if (splitByArch == true && relativePath.startsWith("lib/")) {
+                val archToKeep = targetArch ?: "armeabi-v7a"
+                val fileArch = relativePath.split("/").getOrNull(1)
+                if (fileArch != null && fileArch != archToKeep) {
+                    try {
+                        val size = file.length()
+                        delete(relativePath)
                         removedFiles++
                         freedBytes += size
-                        logger.fine("Cleaned junk file: $relativePath (${size}B)")
-                    }
+                    } catch (_: Exception) {}
+                    return@forEach
                 }
             }
 
-        // 2. Tiêu diệt trọn gói các cây thư mục rác cứng đầu (cả root lẫn assets)
-        val targetTrees = listOf(
-            "kotlin",
-            "assets/audience_network",
-            "assets/dexopt",
-            "com/clevertap",
-            "org/jacoco",
-            "org/joda",
-            "services",
-            "clevertap",
-            "jacoco",
-            "joda"
-        )
-        targetTrees.forEach { treePath ->
-            try {
-                val entry = File(apkRoot, treePath)
-                if (entry.exists()) {
-                    val size = entry.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                    if (entry.deleteRecursively()) {
-                        freedBytes += size
-                        logger.info("Removed junk directory tree: $treePath")
-                    }
-                }
-            } catch (e: Exception) {
-                logger.warning("Failed to remove tree $treePath: ${e.message}")
-            }
-        }
+            // Xử lý xóa rác VFS
+            val shouldDelete = JUNK_PATTERNS.any { it.matches(relativePath) } || 
+                               JUNK_DIRECTORY_PREFIXES.any { relativePath.startsWith(it) } ||
+                               relativePath == "assets/audience_network.dex"
 
-        // 3. Xử lý tách kiến trúc CPU (Thay thế --rip-lib)
-        if (splitByArch == true) {
-            val archToKeep = targetArch ?: "armeabi-v7a"
-            val libDir = File(apkRoot, "lib")
-            if (libDir.isDirectory) {
-                libDir.listFiles()?.forEach { archDir ->
-                    if (archDir.isDirectory && archDir.name != archToKeep) {
-                        try {
-                            val size = archDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                            if (archDir.deleteRecursively()) {
-                                freedBytes += size
-                                logger.info("Stripped unused architecture lib: ${archDir.name}")
-                            }
-                        } catch (e: Exception) {
-                            logger.warning("Failed to strip architecture ${archDir.name}: ${e.message}")
-                        }
-                    }
+            if (shouldDelete) {
+                try {
+                    val size = file.length()
+                    delete(relativePath)
+                    removedFiles++
+                    freedBytes += size
+                } catch (e: Exception) {
+                    logger.warning("APK Cleanup: failed to delete $relativePath from VFS")
                 }
             }
         }
 
-        // 4. Dọn sạch các thư mục rỗng sau khi bay màu file
-        apkRoot.walkBottomUp()
-            .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
-            .forEach { it.delete() }
-
-        logger.info("APK Cleanup: successfully removed $removedFiles junk files/directories, freed ${freedBytes / 1024}KB.")
+        logger.info("APK Cleanup: successfully marked $removedFiles junk files for removal, freeing ~${freedBytes / 1024}KB.")
     }
 }
