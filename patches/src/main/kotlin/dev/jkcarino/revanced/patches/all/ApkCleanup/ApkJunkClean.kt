@@ -52,9 +52,20 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*androidannotations-api\.properties$"""),
     Regex(""".*transport-.*\.properties$"""),
     Regex(""".*jetty-dir\.css$"""),
+    Regex(""".*(?:^|/)baseline\.profm?$"""),
 )
 
-private val EXCLUDED_PREFIXES = listOf("assets/", "res/")
+// Các thư mục rác triệt tiêu toàn bộ bên trong
+private val JUNK_DIRECTORY_PREFIXES = listOf(
+    "assets/dexopt/",
+    "com/clevertap/",
+    "org/jacoco/",
+    "org/joda/",
+    "services/",
+)
+
+// CHỈ loại trừ res/ để không làm hỏng resources.arsc
+private val EXCLUDED_PREFIXES = listOf("res/")
 
 private fun getApkRoot(startFile: File): File {
     var current: File? = startFile
@@ -101,7 +112,6 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        // Bắn phá trực tiếp vào VFS của apk-editor
         fun deleteFromPatcher(relativePath: String) {
             val normalizedPath = relativePath.removePrefix("/")
             val possibleKeys = listOf(
@@ -137,7 +147,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // 1. Quét toàn bộ file trên ổ cứng tạm và triệt tiêu cả VFS lẫn thực tế
+        // 1. Quét toàn bộ file trên ổ cứng tạm và triệt tiêu
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
@@ -147,9 +157,18 @@ val apkCleanupPatch = rawResourcePatch(
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
+                val shouldDelete = when {
+                    JUNK_PATTERNS.any { it.matches(relativePath) } -> true
+                    JUNK_DIRECTORY_PREFIXES.any { relativePath.startsWith(it) } -> true
+                    relativePath == "kotlin" || relativePath.startsWith("kotlin/") -> true
+                    relativePath == "assets/audience_network.dex" ||
+                        relativePath.startsWith("assets/audience_network/") -> true
+                    relativePath.startsWith("META-INF/") -> true
+                    else -> false
+                }
+
+                if (shouldDelete) {
                     val size = file.length()
-                    
                     deleteFromPatcher(relativePath)
 
                     if (file.delete()) {
@@ -160,7 +179,7 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
 
-        // 2. PHẪU THUẬT QUAN TRỌNG: Lột sạch tên tụi nó khỏi "apktool.yml" (Mục unknownFiles)
+        // 2. Phẫu thuật apktool.yml (Mục unknownFiles) giữ nguyên logic xịn của bác
         val ymlFile = File(apkRoot, "apktool.yml")
         if (ymlFile.exists()) {
             try {
@@ -176,19 +195,17 @@ val apkCleanupPatch = rawResourcePatch(
                         continue
                     }
                     if (inUnknownFiles) {
-                        // Nếu gặp dòng không cònụt lề hoặc là một block key mới -> thoát khỏi unknownFiles
                         if (line.isNotEmpty() && !line.startsWith(" ") && !line.startsWith("\t")) {
                             inUnknownFiles = false
                         } else {
                             val colonIndex = trimmed.indexOf(':')
                             if (colonIndex != -1) {
                                 val filePath = trimmed.substring(0, colonIndex).trim().removeSurrounding("\"", "'")
-                                // Kiểm tra xem đường dẫn trong unknownFiles có khớp với JUNK_PATTERNS không
                                 val isJunk = JUNK_PATTERNS.any { it.matches(filePath) } || 
                                              JUNK_PATTERNS.any { it.matches("unknown/$filePath") }
                                 if (isJunk) {
                                     logger.fine("Removed from apktool.yml unknownFiles: $filePath")
-                                    continue // Bỏ qua, không ghi lại dòng này nữa!
+                                    continue
                                 }
                             }
                         }
@@ -201,7 +218,12 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Dọn dẹp các thư mục rác cứng đầu khác
+        // Dọn dẹp các thư mục rác bổ sung
+        JUNK_DIRECTORY_PREFIXES.forEach { prefix ->
+            try { removeTree(prefix.removeSuffix("/")) } catch (_: Exception) {}
+            try { removeTree("unknown/$prefix".removeSuffix("/")) } catch (_: Exception) {}
+        }
+
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("unknown/kotlin") } catch (_: Exception) {}
 
@@ -220,12 +242,12 @@ val apkCleanupPatch = rawResourcePatch(
             }
         } catch (_: Exception) {}
 
-        // Dọn sạch các thư mục rỗng sau khi xóa file
+        // Dọn sạch các thư mục rỗng
         apkRoot.walkBottomUp()
             .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
             .forEach { it.delete() }
 
-        // Xử lý tách kiến trúc CPU (nếu bật tùy chọn)
+        // Xử lý tách kiến trúc CPU
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "armeabi-v7a"
             val libDir = File(apkRoot, "lib")
