@@ -70,7 +70,7 @@ val apkCleanupPatch = rawResourcePatch(
 
     val targetArch by stringOption(
         key = "targetArch",
-        default = "armeabi-v7a",
+        default = "arm64-v8a",
         values = mapOf(
             "arm64-v8a" to "ARM64 (arm64-v8a)",
             "armeabi-v7a" to "ARMv7 (armeabi-v7a)",
@@ -116,7 +116,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét và xóa các file rác ở thư mục root và mọi cấp thông qua ReVanced API delete()
+        // Gom tất cả file rác ở thư mục root đi qua removeTree để Patcher nhận diện và bốc hơi chuẩn xác
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
@@ -129,12 +129,12 @@ val apkCleanupPatch = rawResourcePatch(
                 if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
                     try {
-                        delete(relativePath)
-                        removedFiles++
+                        removeTree(relativePath)
+                        file.delete() // Dọn sạch dấu vết vật lý trên đĩa
                         freedBytes += size
-                        logger.fine("Removed file: $relativePath (${size}B)")
+                        logger.fine("Removed root file: $relativePath (${size}B)")
                     } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to remove file $relativePath: ${e.message}")
+                        logger.warning("APK Cleanup: failed to remove root file $relativePath: ${e.message}")
                     }
                 }
             }
