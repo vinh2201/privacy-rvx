@@ -117,30 +117,9 @@ val apkCleanupPatch = rawResourcePatch(
         }
 
         // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "\", "/", "//")
-
-                if (isProtected(relativePath)) return@forEach
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
-
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
-                    val size = file.length()
-                    try {
-                        if (file.delete()) {
-                            removedFiles++
-                            freedBytes += size
-                            logger.fine("Removed root/junk file: $relativePath (${size}B)")
-                        } else {
-                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
-                        }
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
-                    }
-                }
-            }
+        apkRoot.walkBottomUp()
+            .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
+            .forEach { it.delete() }
 
         try {
             removeTree("kotlin")
