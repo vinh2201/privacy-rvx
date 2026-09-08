@@ -52,9 +52,20 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*androidannotations-api\.properties$"""),
     Regex(""".*transport-.*\.properties$"""),
     Regex(""".*jetty-dir\.css$"""),
+    // ART baseline profiles
+    Regex(""".*(?:^|/)baseline\.profm?$"""),
 )
 
-private val EXCLUDED_PREFIXES = listOf("assets/", "res/")
+// Directories whose ENTIRE content gets deleted, no matter what's inside.
+private val JUNK_DIRECTORY_PREFIXES = listOf(
+    "assets/dexopt/",
+    "com/clevertap/",
+    "org/jacoco/",
+    "org/joda/",
+    "services/",
+)
+
+private val EXCLUDED_PREFIXES = listOf("res/")
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
@@ -70,7 +81,7 @@ val apkCleanupPatch = rawResourcePatch(
 
     val targetArch by stringOption(
         key = "targetArch",
-        default = "arm64-v8a",
+        default = "armeabi-v7a",
         values = mapOf(
             "arm64-v8a" to "ARM64 (arm64-v8a)",
             "armeabi-v7a" to "ARMv7 (armeabi-v7a)",
@@ -116,45 +127,44 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
-        apkRoot.walkBottomUp()
-            .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
-            .forEach { it.delete() }
+        // Quét và áp dụng logic lọc rác chuẩn Morphe (xử lý trực tiếp trên đĩa vật lý của Patcher 21)
+        apkRoot.walkTopDown()
+            .filter { it.isFile }
+            .toList()
+            .forEach { file ->
+                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
 
-        try {
-            removeTree("kotlin")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing kotlin/ folder: ${e.message}")
-        }
+                // Bỏ qua lib/ ở vòng quét này để giữ nguyên cơ chế gọt lib riêng của Patcher 21 bên dưới
+                if (relativePath.startsWith("lib/")) return@forEach
+                if (isProtected(relativePath)) return@forEach
+                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-        try {
-            removeTree("assets/audience_network.dex")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network.dex: ${e.message}")
-        }
+                val shouldDelete = when {
+                    JUNK_PATTERNS.any { it.matches(relativePath) } -> true
+                    JUNK_DIRECTORY_PREFIXES.any { relativePath.startsWith(it) } -> true
+                    relativePath == "kotlin" || relativePath.startsWith("kotlin/") -> true
+                    relativePath == "assets/audience_network.dex" || relativePath.startsWith("assets/audience_network/") -> true
+                    relativePath.startsWith("META-INF/") -> true
+                    else -> false
+                }
 
-        try {
-            removeTree("assets/audience_network")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network/: ${e.message}")
-        }
-
-        try {
-            val metaInf = get("META-INF")
-            if (metaInf.isDirectory) {
-                metaInf.list()?.forEach { name ->
-                    if (name.lowercase() == "services") return@forEach
+                if (shouldDelete) {
+                    val size = file.length()
                     try {
-                        removeTree("META-INF/$name")
+                        if (file.delete()) {
+                            removedFiles++
+                            freedBytes += size
+                            logger.fine("Removed file: $relativePath (${size}B)")
+                        } else {
+                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
+                        }
                     } catch (e: Exception) {
-                        logger.severe("APK Cleanup: failed removing META-INF/$name/: ${e.message}")
+                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
                     }
                 }
             }
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed scanning META-INF/: ${e.message}")
-        }
 
+        // Giữ lại hoàn toàn logic gọt lib chuẩn của bản port ReVanced API Patcher 21
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
             val libDir = get("lib")
@@ -179,6 +189,11 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
         }
+
+        // Dọn sạch các thư mục rỗng thừa thải sau khi xóa file theo chuẩn Morphe
+        apkRoot.walkBottomUp()
+            .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
+            .forEach { it.delete() }
 
         logger.info("APK Cleanup: removed $removedFiles files, freed ${freedBytes / 1024}KB")
     }
