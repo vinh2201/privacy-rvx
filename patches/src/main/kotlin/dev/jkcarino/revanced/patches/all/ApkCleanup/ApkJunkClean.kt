@@ -1,3 +1,6 @@
+// CHUỖI CODE PATCH API PATCHER 21
+// File ApkJunkClean.kt
+// ================================================
 package dev.jkcarino.revanced.patches.all.apkcleanup
 
 import app.revanced.patcher.patch.rawResourcePatch
@@ -67,6 +70,15 @@ private fun getApkRoot(startFile: File): File {
     return startFile.parentFile ?: File(".")
 }
 
+// BỔ SUNG: Hàm chuẩn hóa đường dẫn để API Patcher hiểu
+private fun getPatcherContextPath(diskRelativePath: String): String {
+    return when {
+        diskRelativePath.startsWith("unknown/") -> diskRelativePath.removePrefix("unknown/")
+        diskRelativePath.startsWith("original/") -> diskRelativePath.removePrefix("original/")
+        else -> diskRelativePath
+    }
+}
+
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
     description = "Removes junk and useless files with no runtime purpose inside apk.",
@@ -101,7 +113,6 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        // SỬ DỤNG FILE API THUẦN CHỨ KHÔNG DÙNG get() CỦA PATCHER NỮA
         fun removeTree(path: String) {
             val entry = File(apkRoot, path)
             if (!entry.exists()) return
@@ -109,9 +120,11 @@ val apkCleanupPatch = rawResourcePatch(
                 entry.listFiles()?.forEach { child -> removeTree("$path/${child.name}") }
                 entry.delete()
             } else if (entry.isFile) {
-                if (isProtected(path)) return
+                val contextPath = getPatcherContextPath(path)
+                if (isProtected(contextPath)) return
+                
                 val size = entry.length()
-                try { delete(path) } catch (_: Exception) {} // Báo Patcher gạch tên (nếu có)
+                try { delete(contextPath) } catch (_: Exception) {} // Báo Patcher gạch tên
                 if (entry.delete()) { // Ép xóa vật lý
                     removedFiles++
                     freedBytes += size
@@ -125,13 +138,15 @@ val apkCleanupPatch = rawResourcePatch(
             .toList()
             .forEach { file ->
                 val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+                val contextPath = getPatcherContextPath(relativePath)
 
-                if (isProtected(relativePath)) return@forEach
+                if (isProtected(contextPath) || isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
+                // Check regex dựa trên contextPath (đã loại bỏ unknown/) để khớp chính xác hơn
+                if (JUNK_PATTERNS.any { it.matches(contextPath) } || JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
-                    try { delete(relativePath) } catch (_: Exception) {}
+                    try { delete(contextPath) } catch (_: Exception) {} // Gọi API ReVanced với path chuẩn
                     if (file.delete()) { // Ép xóa vật lý
                         removedFiles++
                         freedBytes += size
@@ -140,16 +155,22 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
 
+        // Cập nhật để vét luôn các thư mục bị vứt vào unknown/
         try { removeTree("kotlin") } catch (_: Exception) {}
+        try { removeTree("unknown/kotlin") } catch (_: Exception) {}
+
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
 
         try {
-            val metaInf = File(apkRoot, "META-INF")
-            if (metaInf.isDirectory) {
-                metaInf.list()?.forEach { name ->
-                    if (name.lowercase() == "services") return@forEach
-                    try { removeTree("META-INF/$name") } catch (_: Exception) {}
+            // Check META-INF ở nhiều ngóc ngách
+            listOf("META-INF", "unknown/META-INF", "original/META-INF").forEach { metaPath ->
+                val metaInf = File(apkRoot, metaPath)
+                if (metaInf.isDirectory) {
+                    metaInf.list()?.forEach { name ->
+                        if (name.lowercase() == "services") return@forEach
+                        try { removeTree("$metaPath/$name") } catch (_: Exception) {}
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -175,3 +196,4 @@ val apkCleanupPatch = rawResourcePatch(
         logger.info("APK Cleanup: removed $removedFiles files, freed ${freedBytes / 1024}KB")
     }
 }
+// ================================================
