@@ -70,7 +70,7 @@ val apkCleanupPatch = rawResourcePatch(
 
     val targetArch by stringOption(
         key = "targetArch",
-        default = "arm64-v8a",
+        default = "armeabi-v7a",
         values = mapOf(
             "arm64-v8a" to "ARM64 (arm64-v8a)",
             "armeabi-v7a" to "ARMv7 (armeabi-v7a)",
@@ -90,7 +90,6 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        // Bê y nguyên hàm removeTree của Morphe, dùng vật lý xoá (entry.delete)
         fun removeTree(path: String) {
             val entry = get(path)
             if (entry.isDirectory) {
@@ -98,22 +97,26 @@ val apkCleanupPatch = rawResourcePatch(
                 val preview = children?.take(5)?.joinToString()
                 logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
                 children?.forEach { child -> removeTree("$path/$child") }
+                try {
+                    delete(path)
+                } catch (_: Exception) {}
             } else if (entry.isFile) {
                 if (isProtected(path)) return
                 val size = entry.length()
-                // Xoá vật lý file!
-                if (entry.delete()) {
+                try {
+                    delete(path)
                     removedFiles++
                     freedBytes += size
                     logger.fine("Removed: $path (${size}B)")
-                } else {
-                    logger.warning("APK Cleanup: failed to delete $path")
+                } catch (e: Exception) {
+                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
                 }
             } else {
                 logger.info("APK Cleanup: $path -> neither file nor directory")
             }
         }
 
+        // Quét và xóa các file rác ở thư mục root và mọi cấp thông qua ReVanced API delete()
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
@@ -125,11 +128,13 @@ val apkCleanupPatch = rawResourcePatch(
 
                 if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
-                    // Dùng file.delete() để đảm bảo file bay màu khỏi ổ đĩa
-                    if (file.delete()) {
+                    try {
+                        delete(relativePath)
                         removedFiles++
                         freedBytes += size
                         logger.fine("Removed file: $relativePath (${size}B)")
+                    } catch (e: Exception) {
+                        logger.warning("APK Cleanup: failed to remove file $relativePath: ${e.message}")
                     }
                 }
             }
@@ -168,12 +173,6 @@ val apkCleanupPatch = rawResourcePatch(
             logger.severe("APK Cleanup: failed scanning META-INF/: ${e.message}")
         }
 
-        // Xoá thư mục trống còn sót lại
-        apkRoot.walkBottomUp()
-            .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
-            .forEach { it.delete() }
-
-        // Xử lý giữ lại kiến trúc CPU được chọn
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
             val libDir = get("lib")
