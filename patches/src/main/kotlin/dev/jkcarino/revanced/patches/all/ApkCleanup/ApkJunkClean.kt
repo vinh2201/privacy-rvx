@@ -121,7 +121,7 @@ val apkCleanupPatch = rawResourcePatch(
             .filter { it.isFile }
             .toList()
             .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "\\unknown\\", "/", "//", "/unknown/", "//unknown//")
 
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
