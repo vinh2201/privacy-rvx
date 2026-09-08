@@ -101,7 +101,7 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        // Bắn phá trực tiếp vào VFS của apk-editor bằng đầy đủ các biến thể đường dẫn có thể có
+        // Bắn phá trực tiếp vào VFS của apk-editor
         fun deleteFromPatcher(relativePath: String) {
             val normalizedPath = relativePath.removePrefix("/")
             val possibleKeys = listOf(
@@ -137,7 +137,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét toàn bộ file trên ổ cứng tạm và triệt tiêu cả VFS lẫn thực tế
+        // 1. Quét toàn bộ file trên ổ cứng tạm và triệt tiêu cả VFS lẫn thực tế
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
@@ -147,14 +147,11 @@ val apkCleanupPatch = rawResourcePatch(
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                // Khớp Regex từ JUNK_PATTERNS
                 if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
                     
-                    // Triệt hạ trong VFS của apk-editor trước
                     deleteFromPatcher(relativePath)
 
-                    // Tiêu hủy xác trên ổ cứng sau
                     if (file.delete()) {
                         removedFiles++
                         freedBytes += size
@@ -163,7 +160,48 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
 
-        // Dọn dẹp các thư mục rác cứng đầu
+        // 2. PHẪU THUẬT QUAN TRỌNG: Lột sạch tên tụi nó khỏi "apktool.yml" (Mục unknownFiles)
+        val ymlFile = File(apkRoot, "apktool.yml")
+        if (ymlFile.exists()) {
+            try {
+                val lines = ymlFile.readLines()
+                val newLines = mutableListOf<String>()
+                var inUnknownFiles = false
+
+                for (line in lines) {
+                    val trimmed = line.trim()
+                    if (trimmed.startsWith("unknownFiles:")) {
+                        inUnknownFiles = true
+                        newLines.add(line)
+                        continue
+                    }
+                    if (inUnknownFiles) {
+                        // Nếu gặp dòng không cònụt lề hoặc là một block key mới -> thoát khỏi unknownFiles
+                        if (line.isNotEmpty() && !line.startsWith(" ") && !line.startsWith("\t")) {
+                            inUnknownFiles = false
+                        } else {
+                            val colonIndex = trimmed.indexOf(':')
+                            if (colonIndex != -1) {
+                                val filePath = trimmed.substring(0, colonIndex).trim().removeSurrounding("\"", "'")
+                                // Kiểm tra xem đường dẫn trong unknownFiles có khớp với JUNK_PATTERNS không
+                                val isJunk = JUNK_PATTERNS.any { it.matches(filePath) } || 
+                                             JUNK_PATTERNS.any { it.matches("unknown/$filePath") }
+                                if (isJunk) {
+                                    logger.fine("Removed from apktool.yml unknownFiles: $filePath")
+                                    continue // Bỏ qua, không ghi lại dòng này nữa!
+                                }
+                            }
+                        }
+                    }
+                    newLines.add(line)
+                }
+                ymlFile.writeText(newLines.joinToString("\n"))
+            } catch (e: Exception) {
+                logger.warning("Failed to sanitize apktool.yml: ${e.message}")
+            }
+        }
+
+        // Dọn dẹp các thư mục rác cứng đầu khác
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("unknown/kotlin") } catch (_: Exception) {}
 
