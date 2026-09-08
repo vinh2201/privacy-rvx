@@ -3,7 +3,6 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
-import java.io.File
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -81,8 +80,6 @@ val apkCleanupPatch = rawResourcePatch(
 
     execute {
         val logger = Logger.getLogger(this::class.java.name)
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
 
         var removedFiles = 0
         var freedBytes = 0L
@@ -115,31 +112,31 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+        // Quét và xóa file rác trực tiếp tại thư mục root của APK thông qua Patcher API
+        try {
+            val rootDir = get("")
+            if (rootDir.isDirectory) {
+                rootDir.list()?.forEach { name ->
+                    if (isProtected(name)) return@forEach
+                    if (EXCLUDED_PREFIXES.any { name.startsWith(it) }) return@forEach
 
-                if (isProtected(relativePath)) return@forEach
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+                    val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
+                    if (coreEntries.any { name.equals(it, ignoreCase = true) } || name.matches(Regex("classes\\d*\\.dex"))) {
+                        return@forEach
+                    }
 
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
-                    val size = file.length()
-                    try {
-                        if (file.delete()) {
-                            removedFiles++
-                            freedBytes += size
-                            logger.info("Removed root/junk file: $relativePath (${size}B)")
-                        } else {
-                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
+                    if (JUNK_PATTERNS.any { it.matches(name) }) {
+                        try {
+                            removeTree(name)
+                        } catch (e: Exception) {
+                            logger.severe("APK Cleanup: failed removing root junk $name: ${e.message}")
                         }
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
                     }
                 }
             }
+        } catch (e: Exception) {
+            logger.severe("APK Cleanup: failed scanning root directory: ${e.message}")
+        }
 
         try {
             removeTree("kotlin")
