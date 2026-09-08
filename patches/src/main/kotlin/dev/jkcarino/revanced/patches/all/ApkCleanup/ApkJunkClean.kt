@@ -67,14 +67,6 @@ private fun getApkRoot(startFile: File): File {
     return startFile.parentFile ?: File(".")
 }
 
-private fun getPatcherContextPath(diskRelativePath: String): String {
-    return when {
-        diskRelativePath.startsWith("unknown/") -> diskRelativePath.removePrefix("unknown/")
-        diskRelativePath.startsWith("original/") -> diskRelativePath.removePrefix("original/")
-        else -> diskRelativePath
-    }
-}
-
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
     description = "Removes junk and useless files with no runtime purpose inside apk.",
@@ -109,18 +101,17 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        // Hàm gọi API delete của Patcher một cách an toàn và chuẩn xác cho apk-editor API 21
-        fun deleteFromPatcher(path: String) {
-            val cleanPath = getPatcherContextPath(path)
-            try {
-                delete(cleanPath)
-            } catch (e: Exception) {
-                logger.warning("Patcher API delete failed for $cleanPath: ${e.message}")
-            }
-            // Dự phòng thêm trường hợp apk-editor yêu cầu đường dẫn tuyệt đối hoặc có tiền tố unknown/
-            if (!cleanPath.startsWith("unknown/")) {
+        // Bắn phá trực tiếp vào VFS của apk-editor bằng đầy đủ các biến thể đường dẫn có thể có
+        fun deleteFromPatcher(relativePath: String) {
+            val normalizedPath = relativePath.removePrefix("/")
+            val possibleKeys = listOf(
+                normalizedPath,
+                "unknown/$normalizedPath",
+                "original/$normalizedPath"
+            )
+            for (key in possibleKeys) {
                 try {
-                    delete("unknown/$cleanPath")
+                    delete(key)
                 } catch (_: Exception) {}
             }
         }
@@ -133,7 +124,7 @@ val apkCleanupPatch = rawResourcePatch(
                 entry.delete()
             } else if (entry.isFile) {
                 val relativePath = entry.relativeTo(apkRoot).path.replace("\\", "/")
-                if (isProtected(getPatcherContextPath(relativePath))) return
+                if (isProtected(relativePath)) return
                 
                 val size = entry.length()
                 deleteFromPatcher(relativePath)
@@ -146,25 +137,24 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét toàn bộ file trên ổ cứng tạm bằng JUNK_PATTERNS như logic ban đầu
+        // Quét toàn bộ file trên ổ cứng tạm và triệt tiêu cả VFS lẫn thực tế
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
             .forEach { file ->
                 val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
-                val contextPath = getPatcherContextPath(relativePath)
 
-                if (isProtected(contextPath) || isProtected(relativePath)) return@forEach
+                if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
                 // Khớp Regex từ JUNK_PATTERNS
-                if (JUNK_PATTERNS.any { it.matches(contextPath) } || JUNK_PATTERNS.any { it.matches(relativePath) }) {
+                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
                     
-                    // Báo Patcher gạch tên khỏi danh sách đóng gói của apk-editor
+                    // Triệt hạ trong VFS của apk-editor trước
                     deleteFromPatcher(relativePath)
 
-                    // Xóa vật lý trên đĩa
+                    // Tiêu hủy xác trên ổ cứng sau
                     if (file.delete()) {
                         removedFiles++
                         freedBytes += size
