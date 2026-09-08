@@ -8,6 +8,17 @@ private val DENSITIES = listOf("ldpi", "mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhd
 private val DRAWABLE_EXTENSIONS = setOf("png", "webp", "jpg", "jpeg", "gif")
 private val MIPMAP_EXTENSIONS = setOf("png", "xml")
 
+private fun getApkRoot(startFile: File): File {
+    var current: File? = startFile
+    while (current != null) {
+        if (File(current, "resources.arsc").exists() && File(current, "AndroidManifest.xml").exists()) {
+            return current
+        }
+        current = current.parentFile
+    }
+    return startFile.parentFile ?: File(".")
+}
+
 private fun groupedDensityDirs(resDir: File, prefix: String): Map<String, MutableMap<String, File>> {
     val groups = mutableMapOf<String, MutableMap<String, File>>()
     resDir.listFiles { f -> f.isDirectory && f.name.split("-").first() == prefix }?.forEach { dir ->
@@ -22,21 +33,23 @@ private fun groupedDensityDirs(resDir: File, prefix: String): Map<String, Mutabl
 
 val drawableCleanPatch = resourcePatch(
     name = "Remove Duplicate Graphics",
-    description = "Keeps images for selected screen densities (e.g. xhdpi, xxhdpi) and removes copies for all other densities.",
+    description = "Keeps images for selected screen densities.",
     use = false,
 ) {
     val targetDensities by stringsOption(
         key = "targetDensity",
         default = null,
         title = "Target densities",
-        description = "Density buckets to keep; duplicates are stripped from every other bucket.",
+        description = "Density buckets to keep.",
     )
 
     execute {
-        val resDir = get("res", false)
-        val apkRoot = resDir.parentFile ?: File(".")
+        val resDirRaw = get("res", false)
+        val apkRoot = getApkRoot(resDirRaw)
+        val resDir = File(apkRoot, "res")
 
-        // Đưa hàm này vào trong execute để dùng được API delete() của Patcher
+        if (!resDir.exists() || !resDir.isDirectory) return@execute
+
         fun dedupeByBaselineDensities(resDir: File, prefix: String, baselines: List<String>, extensions: Set<String>) {
             groupedDensityDirs(resDir, prefix).values.forEach { densityMap ->
                 val baselineNames = mutableSetOf<String>()
@@ -54,14 +67,9 @@ val drawableCleanPatch = resourcePatch(
                     dir.walkTopDown()
                         .filter { it.isFile && it.extension.lowercase() in extensions && it.name in baselineNames }
                         .forEach { file ->
-                            // Báo cáo Patcher gạch tên file này lúc Repack
                             val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
-                            try {
-                                delete(relativePath) 
-                                file.delete() // Dọn luôn rác vật lý
-                            } catch (e: Exception) {
-                                // Bỏ qua nếu lỗi
-                            }
+                            try { delete(relativePath) } catch (_: Exception) {}
+                            file.delete() // Ép xóa vật lý
                         }
                 }
             }
