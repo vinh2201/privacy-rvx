@@ -4,9 +4,6 @@ import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
 import java.io.File
-import java.util.zip.ZipFile
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 import java.util.logging.Logger
 
 private val logger = Logger.getLogger("ApkCleanupPatch")
@@ -69,20 +66,9 @@ private val JUNK_DIRECTORY_PREFIXES = listOf(
 
 private val EXCLUDED_PREFIXES = listOf("res/")
 
-private fun getApkRoot(startFile: File): File {
-    var current: File? = startFile
-    while (current != null) {
-        if (File(current, "resources.arsc").exists() && File(current, "AndroidManifest.xml").exists()) {
-            return current
-        }
-        current = current.parentFile
-    }
-    return startFile.parentFile ?: File(".")
-}
-
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
-    description = "Removes junk and useless files inside apk and nested archives.",
+    description = "Surgically removes junk directly from Patcher's virtual memory.",
     use = false,
 ) {
     val splitByArch by booleanOption(
@@ -106,103 +92,17 @@ val apkCleanupPatch = rawResourcePatch(
     )
 
     execute {
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = getApkRoot(manifestFile)
-
         var removedFiles = 0
-        var freedBytes = 0L
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        fun deleteFromPatcher(relativePath: String) {
-            val normalizedPath = relativePath.removePrefix("/")
-            val possibleKeys = listOf(
-                normalizedPath,
-                "unknown/$normalizedPath",
-                "original/$normalizedPath"
-            )
-            for (key in possibleKeys) {
-                try {
-                    delete(key)
-                } catch (_: Exception) {}
-            }
-        }
+        try {
+            // MẤU CHỐT LÀ ĐÂY: Quét danh sách file từ tận bên trong bộ nhớ của Patcher!
+            // Lấy toàn bộ keys (đường dẫn) mà Patcher đang quản lý
+            val allVirtualFiles = this.apk.files.keys.toList()
 
-        fun removeTree(path: String) {
-            val entry = File(apkRoot, path)
-            if (!entry.exists()) return
-            if (entry.isDirectory) {
-                entry.listFiles()?.forEach { child -> removeTree("$path/${child.name}") }
-                entry.delete()
-            } else if (entry.isFile) {
-                val rawPath = entry.relativeTo(apkRoot).path.replace("\\", "/")
-                val relativePath = rawPath.removePrefix("unknown/").removePrefix("original/")
-                if (isProtected(relativePath)) return
-                
-                val size = entry.length()
-                deleteFromPatcher(rawPath)
-                
-                if (entry.delete()) {
-                    removedFiles++
-                    freedBytes += size
-                }
-            }
-        }
-
-        // 1. Quét và làm sạch các file nén trá hình (.jar, .zip, .aar) ẩn trong assets/ hoặc toàn bộ cây thư mục
-        apkRoot.walkTopDown()
-            .filter { it.isFile && it.extension.lowercase() in listOf("jar", "zip", "aar") }
-            .forEach { archive ->
-                try {
-                    val zipFile = ZipFile(archive)
-                    val entries = zipFile.entries().toList()
-                    val hasJunkInside = entries.any { entry ->
-                        val name = entry.name
-                        JUNK_DIRECTORY_PREFIXES.any { name.startsWith(it) } || 
-                        JUNK_PATTERNS.any { it.matches(name) } ||
-                        name.startsWith("kotlin/") || name == "kotlin"
-                    }
-
-                    if (hasJunkInside) {
-                        val originalSize = archive.length()
-                        val tempFile = File(archive.parentFile, "${archive.name}.tmp")
-                        ZipOutputStream(tempFile.outputStream().buffered()).use { zos ->
-                            zipFile.use { zf ->
-                                zf.entries().asSequence().forEach { entry ->
-                                    val name = entry.name
-                                    val isJunk = JUNK_DIRECTORY_PREFIXES.any { name.startsWith(it) } || 
-                                                 JUNK_PATTERNS.any { it.matches(name) } ||
-                                                 name.startsWith("kotlin/") || name == "kotlin"
-                                    if (!isJunk) {
-                                        zos.putNextEntry(ZipEntry(name))
-                                        zf.getInputStream(entry).use { it.copyTo(zos) }
-                                        zos.closeEntry()
-                                    } else {
-                                        removedFiles++
-                                        logger.fine("Purged from nested archive [${archive.name}]: $name")
-                                    }
-                                }
-                            }
-                        }
-                        archive.delete()
-                        tempFile.renameTo(archive)
-                        freedBytes += (originalSize - archive.length())
-                        logger.info("Successfully cleaned nested container: ${archive.name}")
-                    }
-                } catch (e: Exception) {
-                    logger.warning("Failed to process nested archive ${archive.name}: ${e.message}")
-                }
-            }
-
-        // 2. Quét file thông thường ngoài ổ cứng tạm
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val rawPath = file.relativeTo(apkRoot).path.replace("\\", "/")
-                val relativePath = rawPath
-                    .removePrefix("unknown/")
-                    .removePrefix("original/")
+            allVirtualFiles.forEach { rawPath ->
+                val relativePath = rawPath.replace("\\", "/").removePrefix("unknown/").removePrefix("original/")
 
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
@@ -218,79 +118,39 @@ val apkCleanupPatch = rawResourcePatch(
                 }
 
                 if (shouldDelete) {
-                    val size = file.length()
-                    deleteFromPatcher(rawPath)
-
-                    if (file.delete()) {
+                    try {
+                        // Trảm ngay lập tức bằng lệnh delete của Patcher
+                        delete(rawPath)
                         removedFiles++
-                        freedBytes += size
+                        logger.fine("Vaporized from memory: $rawPath")
+                    } catch (e: Exception) {
+                        // Bỏ qua nếu có lỗi xóa
                     }
                 }
             }
 
-        // 3. Dọn dẹp apktool.yml
-        val ymlFile = File(apkRoot, "apktool.yml")
-        if (ymlFile.exists()) {
-            try {
-                val lines = ymlFile.readLines()
-                val newLines = mutableListOf<String>()
-                var inUnknownFiles = false
-
-                for (line in lines) {
-                    val trimmed = line.trim()
-                    if (trimmed.startsWith("unknownFiles:")) {
-                        inUnknownFiles = true
-                        newLines.add(line)
-                        continue
-                    }
-                    if (inUnknownFiles) {
-                        if (line.isNotEmpty() && !line.startsWith(" ") && !line.startsWith("\t")) {
-                            inUnknownFiles = false
-                        } else {
-                            val colonIndex = trimmed.indexOf(':')
-                            if (colonIndex != -1) {
-                                val filePath = trimmed.substring(0, colonIndex).trim().removeSurrounding("\"", "'")
-                                val cleanPath = filePath.removePrefix("unknown/").removePrefix("original/")
-                                val isJunk = JUNK_PATTERNS.any { it.matches(cleanPath) } || 
-                                             JUNK_DIRECTORY_PREFIXES.any { cleanPath.startsWith(it) } ||
-                                             cleanPath == "kotlin" || cleanPath.startsWith("okhttp3/")
-                                if (isJunk) continue
-                            }
-                        }
-                    }
-                    newLines.add(line)
-                }
-                ymlFile.writeText(newLines.joinToString("\n"))
-            } catch (_: Exception) {}
-        }
-
-        // 4. Xóa các thư mục rác cứng đầu trên mọi nhánh
-        listOf("", "unknown/", "original/").forEach { prefix ->
-            JUNK_DIRECTORY_PREFIXES.forEach { dir ->
-                try { removeTree("$prefix${dir.removeSuffix("/")}") } catch (_: Exception) {}
-            }
-            try { removeTree("${prefix}kotlin") } catch (_: Exception) {}
-        }
-
-        // Dọn sạch thư mục rỗng
-        apkRoot.walkBottomUp()
-            .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
-            .forEach { it.delete() }
-
-        // Xử lý tách kiến trúc CPU
-        if (splitByArch == true) {
-            val archToKeep = targetArch ?: "armeabi-v7a"
-            val libDir = File(apkRoot, "lib")
-            if (libDir.isDirectory) {
-                val archNames = libDir.list()?.toList() ?: emptyList()
-                if (archNames.contains(archToKeep)) {
-                    archNames.filter { it != archToKeep }.forEach { arch ->
-                        try { removeTree("lib/$arch") } catch (_: Exception) {}
+            // Xử lý tách kiến trúc CPU (Quét trong bộ nhớ thay vì ổ cứng)
+            if (splitByArch == true) {
+                val archToKeep = targetArch ?: "armeabi-v7a"
+                
+                // Lọc tất cả các file nằm trong thư mục lib/
+                val libFiles = allVirtualFiles.filter { it.startsWith("lib/") }
+                
+                libFiles.forEach { libPath ->
+                    val arch = libPath.substringAfter("lib/").substringBefore("/")
+                    if (arch != archToKeep) {
+                        try {
+                            delete(libPath)
+                            removedFiles++
+                        } catch (_: Exception) {}
                     }
                 }
             }
+
+        } catch (e: Exception) {
+            logger.warning("Lỗi truy xuất bộ nhớ ảo của Patcher: ${e.message}")
         }
 
-        logger.info("APK Cleanup: successfully destroyed $removedFiles junk entries (including inner container files), freed ${freedBytes / 1024}KB.")
+        logger.info("APK Cleanup: successfully vaporized $removedFiles junk entries directly from memory.")
     }
 }
