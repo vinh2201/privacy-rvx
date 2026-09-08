@@ -4,6 +4,9 @@ import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
 import java.io.File
+import java.util.zip.ZipFile
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import java.util.logging.Logger
 
 private val logger = Logger.getLogger("ApkCleanupPatch")
@@ -55,16 +58,15 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*(?:^|/)baseline\.profm?$"""),
 )
 
-// Các thư mục rác triệt tiêu toàn bộ bên trong
 private val JUNK_DIRECTORY_PREFIXES = listOf(
     "assets/dexopt/",
     "com/clevertap/",
     "org/jacoco/",
     "org/joda/",
     "services/",
+    "okhttp3/",
 )
 
-// CHỈ loại trừ res/ để không làm hỏng resources.arsc
 private val EXCLUDED_PREFIXES = listOf("res/")
 
 private fun getApkRoot(startFile: File): File {
@@ -80,7 +82,7 @@ private fun getApkRoot(startFile: File): File {
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
-    description = "Removes junk and useless files with no runtime purpose inside apk.",
+    description = "Removes junk and useless files inside apk and nested archives.",
     use = false,
 ) {
     val splitByArch by booleanOption(
@@ -133,26 +135,74 @@ val apkCleanupPatch = rawResourcePatch(
                 entry.listFiles()?.forEach { child -> removeTree("$path/${child.name}") }
                 entry.delete()
             } else if (entry.isFile) {
-                val relativePath = entry.relativeTo(apkRoot).path.replace("\\", "/")
+                val rawPath = entry.relativeTo(apkRoot).path.replace("\\", "/")
+                val relativePath = rawPath.removePrefix("unknown/").removePrefix("original/")
                 if (isProtected(relativePath)) return
                 
                 val size = entry.length()
-                deleteFromPatcher(relativePath)
+                deleteFromPatcher(rawPath)
                 
                 if (entry.delete()) {
                     removedFiles++
                     freedBytes += size
-                    logger.fine("Removed tree entry: $relativePath (${size}B)")
                 }
             }
         }
 
-        // 1. Quét toàn bộ file trên ổ cứng tạm và triệt tiêu
+        // 1. Quét và làm sạch các file nén trá hình (.jar, .zip, .aar) ẩn trong assets/ hoặc toàn bộ cây thư mục
+        apkRoot.walkTopDown()
+            .filter { it.isFile && it.extension.lowercase() in listOf("jar", "zip", "aar") }
+            .forEach { archive ->
+                try {
+                    val zipFile = ZipFile(archive)
+                    val entries = zipFile.entries().toList()
+                    val hasJunkInside = entries.any { entry ->
+                        val name = entry.name
+                        JUNK_DIRECTORY_PREFIXES.any { name.startsWith(it) } || 
+                        JUNK_PATTERNS.any { it.matches(name) } ||
+                        name.startsWith("kotlin/") || name == "kotlin"
+                    }
+
+                    if (hasJunkInside) {
+                        val originalSize = archive.length()
+                        val tempFile = File(archive.parentFile, "${archive.name}.tmp")
+                        ZipOutputStream(tempFile.outputStream().buffered()).use { zos ->
+                            zipFile.use { zf ->
+                                zf.entries().asSequence().forEach { entry ->
+                                    val name = entry.name
+                                    val isJunk = JUNK_DIRECTORY_PREFIXES.any { name.startsWith(it) } || 
+                                                 JUNK_PATTERNS.any { it.matches(name) } ||
+                                                 name.startsWith("kotlin/") || name == "kotlin"
+                                    if (!isJunk) {
+                                        zos.putNextEntry(ZipEntry(name))
+                                        zf.getInputStream(entry).use { it.copyTo(zos) }
+                                        zos.closeEntry()
+                                    } else {
+                                        removedFiles++
+                                        logger.fine("Purged from nested archive [${archive.name}]: $name")
+                                    }
+                                }
+                            }
+                        }
+                        archive.delete()
+                        tempFile.renameTo(archive)
+                        freedBytes += (originalSize - archive.length())
+                        logger.info("Successfully cleaned nested container: ${archive.name}")
+                    }
+                } catch (e: Exception) {
+                    logger.warning("Failed to process nested archive ${archive.name}: ${e.message}")
+                }
+            }
+
+        // 2. Quét file thông thường ngoài ổ cứng tạm
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
             .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+                val rawPath = file.relativeTo(apkRoot).path.replace("\\", "/")
+                val relativePath = rawPath
+                    .removePrefix("unknown/")
+                    .removePrefix("original/")
 
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
@@ -169,17 +219,16 @@ val apkCleanupPatch = rawResourcePatch(
 
                 if (shouldDelete) {
                     val size = file.length()
-                    deleteFromPatcher(relativePath)
+                    deleteFromPatcher(rawPath)
 
                     if (file.delete()) {
                         removedFiles++
                         freedBytes += size
-                        logger.fine("Cleaned junk file: $relativePath (${size}B)")
                     }
                 }
             }
 
-        // 2. Phẫu thuật apktool.yml (Mục unknownFiles) giữ nguyên logic xịn của bác
+        // 3. Dọn dẹp apktool.yml
         val ymlFile = File(apkRoot, "apktool.yml")
         if (ymlFile.exists()) {
             try {
@@ -201,48 +250,29 @@ val apkCleanupPatch = rawResourcePatch(
                             val colonIndex = trimmed.indexOf(':')
                             if (colonIndex != -1) {
                                 val filePath = trimmed.substring(0, colonIndex).trim().removeSurrounding("\"", "'")
-                                val isJunk = JUNK_PATTERNS.any { it.matches(filePath) } || 
-                                             JUNK_PATTERNS.any { it.matches("unknown/$filePath") }
-                                if (isJunk) {
-                                    logger.fine("Removed from apktool.yml unknownFiles: $filePath")
-                                    continue
-                                }
+                                val cleanPath = filePath.removePrefix("unknown/").removePrefix("original/")
+                                val isJunk = JUNK_PATTERNS.any { it.matches(cleanPath) } || 
+                                             JUNK_DIRECTORY_PREFIXES.any { cleanPath.startsWith(it) } ||
+                                             cleanPath == "kotlin" || cleanPath.startsWith("okhttp3/")
+                                if (isJunk) continue
                             }
                         }
                     }
                     newLines.add(line)
                 }
                 ymlFile.writeText(newLines.joinToString("\n"))
-            } catch (e: Exception) {
-                logger.warning("Failed to sanitize apktool.yml: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
-        // Dọn dẹp các thư mục rác bổ sung
-        JUNK_DIRECTORY_PREFIXES.forEach { prefix ->
-            try { removeTree(prefix.removeSuffix("/")) } catch (_: Exception) {}
-            try { removeTree("unknown/$prefix".removeSuffix("/")) } catch (_: Exception) {}
+        // 4. Xóa các thư mục rác cứng đầu trên mọi nhánh
+        listOf("", "unknown/", "original/").forEach { prefix ->
+            JUNK_DIRECTORY_PREFIXES.forEach { dir ->
+                try { removeTree("$prefix${dir.removeSuffix("/")}") } catch (_: Exception) {}
+            }
+            try { removeTree("${prefix}kotlin") } catch (_: Exception) {}
         }
 
-        try { removeTree("kotlin") } catch (_: Exception) {}
-        try { removeTree("unknown/kotlin") } catch (_: Exception) {}
-
-        try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
-        try { removeTree("assets/audience_network") } catch (_: Exception) {}
-
-        try {
-            listOf("META-INF", "unknown/META-INF", "original/META-INF").forEach { metaPath ->
-                val metaInf = File(apkRoot, metaPath)
-                if (metaInf.isDirectory) {
-                    metaInf.list()?.forEach { name ->
-                        if (name.lowercase() == "services") return@forEach
-                        try { removeTree("$metaPath/$name") } catch (_: Exception) {}
-                    }
-                }
-            }
-        } catch (_: Exception) {}
-
-        // Dọn sạch các thư mục rỗng
+        // Dọn sạch thư mục rỗng
         apkRoot.walkBottomUp()
             .filter { it.isDirectory && it != apkRoot && it.listFiles()?.isEmpty() == true }
             .forEach { it.delete() }
@@ -251,7 +281,6 @@ val apkCleanupPatch = rawResourcePatch(
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "armeabi-v7a"
             val libDir = File(apkRoot, "lib")
-
             if (libDir.isDirectory) {
                 val archNames = libDir.list()?.toList() ?: emptyList()
                 if (archNames.contains(archToKeep)) {
@@ -262,6 +291,6 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        logger.info("APK Cleanup: successfully removed $removedFiles junk files, freed ${freedBytes / 1024}KB.")
+        logger.info("APK Cleanup: successfully destroyed $removedFiles junk entries (including inner container files), freed ${freedBytes / 1024}KB.")
     }
 }
