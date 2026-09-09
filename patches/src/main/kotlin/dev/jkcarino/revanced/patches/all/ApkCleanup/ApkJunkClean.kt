@@ -131,7 +131,7 @@ val apkCleanupPatch = rawResourcePatch(
                         if (file.delete()) {
                             removedFiles++
                             freedBytes += size
-                            logger.fine("Removed root/junk file: $relativePath (${size}B)")
+                            logger.info("Removed root/junk file: $relativePath (${size}B)")
                         } else {
                             logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
                         }
