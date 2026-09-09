@@ -4,7 +4,6 @@ import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
 import java.io.File
-import java.util.zip.ZipFile
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -88,7 +87,46 @@ val apkCleanupPatch = rawResourcePatch(
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
         fun isJunk(relativePath: String) = JUNK_PATTERNS.any { it.matches(relativePath) }
 
-        // Hàm xóa cây thư mục hệ thống VFS
+        // Săn tìm chính xác thư mục tạm đang bung nén APK của Patcher
+        val tempDir = File(System.getProperty("java.io.tmpdir"))
+        val apkRoot = tempDir.walkTopDown()
+            .maxDepth(3)
+            .find { it.isDirectory && File(it, "AndroidManifest.xml").exists() }
+            ?: File(".").walkTopDown().find { it.isDirectory && File(it, "AndroidManifest.xml").exists() }
+
+        if (apkRoot != null) {
+            logger.info("APK Cleanup: Targeted workspace -> ${apkRoot.absolutePath}")
+
+            // Quét toàn bộ bằng bộ lọc JUNK_PATTERNS (bao gồm cả root lẫn mọi ngóc ngách)
+            apkRoot.walkTopDown()
+                .filter { it.isFile }
+                .toList()
+                .forEach { file ->
+                    val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+
+                    if (isProtected(relativePath)) return@forEach
+                    if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+
+                    if (isJunk(relativePath)) {
+                        val size = file.length()
+                        try {
+                            if (file.delete()) {
+                                removedFiles++
+                                freedBytes += size
+                                logger.info("Removed Junk Match: $relativePath (${size}B)")
+                            } else {
+                                logger.warning("APK Cleanup: failed to delete file: $relativePath")
+                            }
+                        } catch (e: Exception) {
+                            logger.warning("APK Cleanup: exception deleting $relativePath: ${e.message}")
+                        }
+                    }
+                }
+        } else {
+            logger.warning("APK Cleanup: Could not locate active unpacked APK workspace directory.")
+        }
+
+        // Dọn dẹp qua Patcher API cho các thư mục VFS bổ trợ
         fun removeTree(path: String) {
             val entry = get(path)
             if (entry.isDirectory) {
@@ -102,55 +140,27 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                     removedFiles++
                     freedBytes += size
-                    logger.info("Removed tree node: $path (${size}B)")
+                    logger.info("Removed VFS tree node: $path (${size}B)")
                 } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
+                    logger.warning("APK Cleanup: failed to delete VFS node $path: ${e.message}")
                 }
             }
         }
 
-        // TỰ ĐỘNG HÓA HOÀN TOÀN: Quét mọi ngóc ngách (bao gồm cả root bị mù) thông qua file APK vật lý
-        val workingDir = File(".")
-        val apkFile = workingDir.listFiles()?.find { it.extension.equals("apk", ignoreCase = true) }
-
-        if (apkFile != null) {
-            try {
-                ZipFile(apkFile).use { zip ->
-                    val entries = zip.entries()
-                    while (entries.hasMoreElements()) {
-                        val entry = entries.nextElement()
-                        if (entry.isDirectory) continue
-
-                        val path = entry.name
-                        if (isProtected(path)) continue
-                        if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) continue
-
-                        if (isJunk(path)) {
-                            val size = entry.size
-                            try {
-                                delete(path)
-                                removedFiles++
-                                freedBytes += if (size >= 0) size else 0L
-                                logger.info("Removed Dynamic Junk: $path (${if (size >= 0) "$size" else "unknown"}B)")
-                            } catch (e: Exception) {
-                                logger.warning("APK Cleanup: failed to delete dynamic junk $path: ${e.message}")
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                logger.warning("APK Cleanup: Failed to inspect physical APK zip: ${e.message}")
-            }
-        } else {
-            logger.warning("APK Cleanup: Could not locate source APK file in working directory for deep scan.")
-        }
-
-        // Dọn dẹp thủ công các cụm thư mục rác nặng ký khác
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
 
-        // Xóa theo kiến trúc lib
+        try {
+            val metaInf = get("META-INF")
+            if (metaInf.isDirectory) {
+                metaInf.list()?.forEach { name ->
+                    if (name.lowercase() == "services") return@forEach
+                    try { removeTree("META-INF/$name") } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
             val libDir = get("lib")
@@ -163,8 +173,6 @@ val apkCleanupPatch = rawResourcePatch(
                     archNames.filter { it != archToKeep }.forEach { arch ->
                         try { removeTree("lib/$arch") } catch (_: Exception) {}
                     }
-                } else {
-                    logger.warning("APK Cleanup: architecture \"$archToKeep\" not found in lib/. Keeping all architectures.")
                 }
             }
         }
