@@ -100,7 +100,7 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                     removedFiles++
                     freedBytes += size
-                    logger.fine("Removed VFS tree node: $path (${size}B)")
+                    logger.info("Removed VFS tree node: $path (${size}B)")
                 } catch (e: Exception) {
                     logger.warning("APK Cleanup: failed to delete VFS node $path: ${e.message}")
                 }
@@ -125,7 +125,7 @@ val apkCleanupPatch = rawResourcePatch(
                         delete(path)
                         removedFiles++
                         freedBytes += size
-                        logger.fine("Removed VFS junk file: $path (${size}B)")
+                        logger.info("Removed VFS junk file: $path (${size}B)")
                     } catch (e: Exception) {
                         logger.warning("APK Cleanup: failed to delete VFS junk $path: ${e.message}")
                     }
