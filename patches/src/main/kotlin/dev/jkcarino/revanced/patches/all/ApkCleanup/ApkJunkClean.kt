@@ -81,11 +81,13 @@ val apkCleanupPatch = rawResourcePatch(
 
     execute {
         val logger = Logger.getLogger(this::class.java.name)
+        val manifestFile = get("AndroidManifest.xml")
+        val apkRoot = manifestFile.parentFile ?: File(".")
 
         var removedFiles = 0
         var freedBytes = 0L
 
-        fun isProtected(path: String) = PROTECTED_PATTERNS.any { it.matches(path) }
+        fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
         fun removeTree(path: String) {
             val entry = get(path)
@@ -109,21 +111,16 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét toàn bộ file thông qua disk workspace của Patcher API và match trực tiếp với JUNK_PATTERNS
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
-
+        // Quét toàn bộ file rác dựa trên JUNK_PATTERNS và sử dụng hàm delete() chuẩn của Patcher VFS
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .forEach { file ->
-                val rawRelative = file.relativeTo(apkRoot).path.replace("\\", "/")
-                // Loại bỏ prefix "root/" nếu VFS trả về để regex match chuẩn xác tuyệt đối
-                val relativePath = rawRelative.removePrefix("root/")
+                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
 
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                if (JUNK_PATTERNS.any { it.matches(relativePath) || it.matches(rawRelative) }) {
+                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
                     val size = file.length()
                     try {
                         delete(relativePath)
@@ -144,7 +141,6 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
 
-        // Dọn dẹp các thư mục rác chuyên biệt khác
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
