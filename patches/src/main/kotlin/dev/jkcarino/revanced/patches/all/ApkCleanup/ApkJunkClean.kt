@@ -3,7 +3,10 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
+import java.io.File
 import java.util.logging.Logger
+
+private val logger = Logger.getLogger("ApkCleanupPatch")
 
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
@@ -79,7 +82,9 @@ val apkCleanupPatch = rawResourcePatch(
     )
 
     execute {
-        val logger = Logger.getLogger(this::class.java.name)
+        val manifestFile = get("AndroidManifest.xml")
+        val apkRoot = manifestFile.parentFile ?: File(".")
+
         var removedFiles = 0
         var freedBytes = 0L
 
@@ -89,7 +94,9 @@ val apkCleanupPatch = rawResourcePatch(
             val entry = get(path)
             if (entry.isDirectory) {
                 val children = entry.list()
-                children?.forEach { child -> removeTree(if (path.isEmpty()) child else "$path/$child") }
+                val preview = children?.take(5)?.joinToString()
+                logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
+                children?.forEach { child -> removeTree("$path/$child") }
                 try {
                     delete(path)
                 } catch (_: Exception) {}
@@ -100,37 +107,41 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                     removedFiles++
                     freedBytes += size
-                    logger.info("Removed VFS tree node: $path (${size}B)")
+                    logger.fine("Removed: $path (${size}B)")
                 } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete VFS node $path: ${e.message}")
+                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
                 }
+            } else {
+                logger.info("APK Cleanup: $path -> neither file nor directory")
             }
         }
 
-        // Danh sách các tên file hoặc pattern rác cụ thể nằm ở thư mục root APK
-        val rootJunkNames = listOf(
-            "DebugProbesKt.bin",
-            "androidsupportmultidexversion.txt"
-        )
+        // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
+        apkRoot.walkTopDown()
+            .filter { it.isFile }
+            .toList()
+            .forEach { file ->
+                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
 
-        // Quét và xóa các file rác ở thư mục root an toàn qua VFS
-        fun cleanRootJunk(fileName: String) {
-            try {
-                val entry = get(fileName)
-                if (entry.isFile) {
-                    val size = entry.length()
-                    delete(fileName)
-                    removedFiles++
-                    freedBytes += size
-                    logger.info("Removed VFS root junk file: $fileName (${size}B)")
+                if (isProtected(relativePath)) return@forEach
+                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+
+                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
+                    val size = file.length()
+                    try {
+                        if (file.delete()) {
+                            removedFiles++
+                            freedBytes += size
+                            logger.fine("Removed root/junk file: $relativePath (${size}B)")
+                        } else {
+                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
+                        }
+                    } catch (e: Exception) {
+                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
+                    }
                 }
-            } catch (_: Exception) {}
-        }
+            }
 
-        // Xóa các file rác khớp pattern định sẵn ở root (như firebase-*, play-services-*, *.proto, v.v.)
-        // Do Patcher API dùng đường dẫn tương đối từ root, ta có thể thử trực tiếp các tên phổ biến hoặc quét qua danh sách mở rộng nếu API hỗ trợ.
-
-        // 2. Dọn dẹp các thư mục hệ thống / phụ trợ khác qua VFS
         try {
             removeTree("kotlin")
         } catch (e: Exception) {
