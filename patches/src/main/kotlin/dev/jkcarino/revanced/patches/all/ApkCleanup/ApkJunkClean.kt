@@ -5,8 +5,6 @@ import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
 import java.util.logging.Logger
 
-private val logger = Logger.getLogger("ApkCleanupPatch")
-
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
     Regex(""".*META-INF/services/.*"""),
@@ -81,6 +79,7 @@ val apkCleanupPatch = rawResourcePatch(
     )
 
     execute {
+        val logger = Logger.getLogger(this::class.java.name)
         var removedFiles = 0
         var freedBytes = 0L
 
