@@ -3,6 +3,7 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
+import java.io.File
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -112,7 +113,45 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét và xóa file rác trực tiếp tại thư mục root của APK thông qua Patcher API
+        // 1. Quét thư mục 'unknown' (nơi Apktool gom các file gốc không xác định)
+        try {
+            val unknownDir = get("unknown")
+            if (unknownDir.isDirectory) {
+                unknownDir.walkTopDown()
+                    .filter { it.isFile }
+                    .forEach { file ->
+                        // Tính đường dẫn tương đối để match regex như thể nó ở thư mục gốc
+                        val relativePath = file.relativeTo(unknownDir).path.replace("\\", "/")
+
+                        if (isProtected(relativePath)) return@forEach
+                        if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+
+                        if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
+                            val size = file.length()
+                            try {
+                                if (file.delete()) {
+                                    removedFiles++
+                                    freedBytes += size
+                                    logger.info("Removed root/unknown junk: $relativePath (${size}B)")
+                                }
+                            } catch (e: Exception) {
+                                logger.warning("APK Cleanup: failed to delete unknown file $relativePath: ${e.message}")
+                            }
+                        }
+                    }
+
+                // Dọn các thư mục con rỗng bên trong unknown
+                unknownDir.walkBottomUp()
+                    .filter { it.isDirectory && it != unknownDir && it.list()?.isEmpty() == true }
+                    .forEach {
+                        try { it.delete() } catch (_: Exception) {}
+                    }
+            }
+        } catch (e: Exception) {
+            logger.severe("APK Cleanup: failed scanning unknown directory: ${e.message}")
+        }
+
+        // 2. Fallback quét thư mục root hiện tại (phòng hờ cấu trúc khác biệt)
         try {
             val rootDir = get("")
             if (rootDir.isDirectory) {
@@ -120,7 +159,7 @@ val apkCleanupPatch = rawResourcePatch(
                     if (isProtected(name)) return@forEach
                     if (EXCLUDED_PREFIXES.any { name.startsWith(it) }) return@forEach
 
-                    val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
+                    val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "unknown", "AndroidManifest.xml")
                     if (coreEntries.any { name.equals(it, ignoreCase = true) } || name.matches(Regex("classes\\d*\\.dex"))) {
                         return@forEach
                     }
