@@ -3,8 +3,9 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
-import java.io.File
 import java.util.logging.Logger
+
+private val logger = Logger.getLogger("ApkCleanupPatch")
 
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
@@ -80,10 +81,6 @@ val apkCleanupPatch = rawResourcePatch(
     )
 
     execute {
-        val logger = Logger.getLogger(this::class.java.name)
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
-
         var removedFiles = 0
         var freedBytes = 0L
 
@@ -93,9 +90,7 @@ val apkCleanupPatch = rawResourcePatch(
             val entry = get(path)
             if (entry.isDirectory) {
                 val children = entry.list()
-                val preview = children?.take(5)?.joinToString()
-                logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
-                children?.forEach { child -> removeTree("$path/$child") }
+                children?.forEach { child -> removeTree(if (path.isEmpty()) child else "$path/$child") }
                 try {
                     delete(path)
                 } catch (_: Exception) {}
@@ -106,41 +101,43 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                     removedFiles++
                     freedBytes += size
-                    logger.info("Removed: $path (${size}B)")
+                    logger.fine("Removed VFS tree node: $path (${size}B)")
                 } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
+                    logger.warning("APK Cleanup: failed to delete VFS node $path: ${e.message}")
                 }
-            } else {
-                logger.info("APK Cleanup: $path -> neither file nor directory")
             }
         }
 
-        // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+        // Duyệt và xóa rác trực tiếp trên VFS của Patcher API từ gốc
+        fun walkAndClean(path: String) {
+            val entry = try { get(path) } catch (_: Exception) { return }
+            if (entry.isDirectory) {
+                entry.list()?.forEach { child ->
+                    val childPath = if (path.isEmpty()) child else "$path/$child"
+                    walkAndClean(childPath)
+                }
+            } else if (entry.isFile) {
+                if (isProtected(path)) return
+                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
 
-                if (isProtected(relativePath)) return@forEach
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
-
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
-                    val size = file.length()
+                if (JUNK_PATTERNS.any { it.matches(path) }) {
+                    val size = entry.length()
                     try {
-                        if (file.delete()) {
-                            removedFiles++
-                            freedBytes += size
-                            logger.info("Removed root/junk file: $relativePath (${size}B)")
-                        } else {
-                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
-                        }
+                        delete(path)
+                        removedFiles++
+                        freedBytes += size
+                        logger.fine("Removed VFS junk file: $path (${size}B)")
                     } catch (e: Exception) {
-                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
+                        logger.warning("APK Cleanup: failed to delete VFS junk $path: ${e.message}")
                     }
                 }
             }
+        }
 
+        // 1. Quét toàn bộ VFS từ gốc để bứng sạch đống .properties, .proto, .bin, ...
+        walkAndClean("")
+
+        // 2. Dọn dẹp các thư mục hệ thống / phụ trợ khác qua VFS
         try {
             removeTree("kotlin")
         } catch (e: Exception) {
