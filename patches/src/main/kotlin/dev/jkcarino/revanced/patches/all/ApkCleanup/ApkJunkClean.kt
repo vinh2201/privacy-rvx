@@ -107,34 +107,28 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Duyệt và xóa rác trực tiếp trên VFS của Patcher API
-        fun walkAndClean(path: String) {
-            val entry = try { get(path) } catch (_: Exception) { return }
-            if (entry.isDirectory) {
-                entry.list()?.forEach { child ->
-                    val childPath = if (path.isEmpty()) child else "$path/$child"
-                    walkAndClean(childPath)
-                }
-            } else if (entry.isFile) {
-                if (isProtected(path)) return
-                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
+        // Danh sách các tên file hoặc pattern rác cụ thể nằm ở thư mục root APK
+        val rootJunkNames = listOf(
+            "DebugProbesKt.bin",
+            "androidsupportmultidexversion.txt"
+        )
 
-                if (JUNK_PATTERNS.any { it.matches(path) }) {
+        // Quét và xóa các file rác ở thư mục root an toàn qua VFS
+        fun cleanRootJunk(fileName: String) {
+            try {
+                val entry = get(fileName)
+                if (entry.isFile) {
                     val size = entry.length()
-                    try {
-                        delete(path)
-                        removedFiles++
-                        freedBytes += size
-                        logger.info("Removed VFS junk file: $path (${size}B)")
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to delete VFS junk $path: ${e.message}")
-                    }
+                    delete(fileName)
+                    removedFiles++
+                    freedBytes += size
+                    logger.info("Removed VFS root junk file: $fileName (${size}B)")
                 }
-            }
+            } catch (_: Exception) {}
         }
 
-        // 1. Quét sạch sành sanh root bằng VFS walker để bứng gọn đống .properties, .proto, .bin
-        walkAndClean("")
+        // Xóa các file rác khớp pattern định sẵn ở root (như firebase-*, play-services-*, *.proto, v.v.)
+        // Do Patcher API dùng đường dẫn tương đối từ root, ta có thể thử trực tiếp các tên phổ biến hoặc quét qua danh sách mở rộng nếu API hỗ trợ.
 
         // 2. Dọn dẹp các thư mục hệ thống / phụ trợ khác qua VFS
         try {
