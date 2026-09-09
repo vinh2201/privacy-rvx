@@ -3,6 +3,7 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
+import java.io.File
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -87,77 +88,86 @@ val apkCleanupPatch = rawResourcePatch(
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
         fun isJunk(relativePath: String) = JUNK_PATTERNS.any { it.matches(relativePath) }
 
-        // Đệ quy toàn diện trên hệ thống VFS của Patcher (Quét sạch từ META-INF, kotlin, v.v.)
-        fun sweepVFS(path: String) {
-            try {
-                val entry = get(path)
-                if (entry.isDirectory) {
-                    entry.list()?.forEach { child ->
-                        val fullPath = if (path.isEmpty()) child else "$path/$child"
-                        sweepVFS(fullPath)
-                    }
-                } else if (entry.isFile) {
-                    if (isProtected(path)) return
-                    if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
+        // Định vị chính xác thư mục workspace vật lý của Apktool trong java.io.tmpdir
+        val tempDir = File(System.getProperty("java.io.tmpdir"))
+        val apkRoot = tempDir.walkTopDown()
+            .maxDepth(4)
+            .find { it.isDirectory && File(it, "AndroidManifest.xml").exists() }
+            ?: File(".").walkTopDown().find { it.isDirectory && File(it, "AndroidManifest.xml").exists() }
 
-                    if (isJunk(path)) {
-                        val size = entry.length()
+        if (apkRoot != null) {
+            logger.info("APK Cleanup: Targeted workspace -> ${apkRoot.absolutePath}")
+
+            // Càn quét toàn bộ file rác từ gốc đến ngọn bằng JUNK_PATTERNS
+            apkRoot.walkTopDown()
+                .filter { it.isFile }
+                .forEach { file ->
+                    val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+
+                    if (isProtected(relativePath)) return@forEach
+                    if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+
+                    if (isJunk(relativePath)) {
+                        val size = file.length()
                         try {
-                            delete(path)
-                            removedFiles++
-                            freedBytes += size
-                            logger.info("Removed VFS Junk: $path (${size}B)")
+                            if (file.delete()) {
+                                removedFiles++
+                                freedBytes += size
+                                logger.info("Removed Junk Match: $relativePath (${size}B)")
+                            } else {
+                                logger.warning("APK Cleanup: failed to delete file: $relativePath")
+                            }
                         } catch (e: Exception) {
-                            logger.warning("APK Cleanup: failed to delete VFS junk $path: ${e.message}")
+                            logger.warning("APK Cleanup: exception deleting $relativePath: ${e.message}")
                         }
                     }
                 }
-            } catch (_: Exception) {}
+        } else {
+            logger.warning("APK Cleanup: Could not locate active unpacked APK workspace directory.")
         }
 
-        // BƯỚC 1: Quét toàn lực bằng VFS Engine
-        sweepVFS("")
-
-        // BƯỚC 2: Dọn dẹp thủ công các cụm thư mục rác cứng đầu
+        // Dọn dẹp qua Patcher API cho các cụm thư mục bổ trợ và kiến trúc
         fun removeTree(path: String) {
-            val entry = get(path)
-            if (entry.isDirectory) {
-                val children = entry.list()
-                children?.forEach { child -> removeTree("$path/$child") }
-                try { delete(path) } catch (_: Exception) {}
-            } else if (entry.isFile) {
-                if (isProtected(path)) return
-                val size = entry.length()
-                try {
-                    delete(path)
-                    removedFiles++
-                    freedBytes += size
-                    logger.info("Removed tree node: $path (${size}B)")
-                } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
+            try {
+                val entry = get(path)
+                if (entry.isDirectory) {
+                    val children = entry.list()
+                    children?.forEach { child -> removeTree("$path/$child") }
+                    try { delete(path) } catch (_: Exception) {}
+                } else if (entry.isFile) {
+                    if (isProtected(path)) return
+                    val size = entry.length()
+                    try {
+                        delete(path)
+                        removedFiles++
+                        freedBytes += size
+                        logger.info("Removed VFS tree node: $path (${size}B)")
+                    } catch (e: Exception) {
+                        logger.warning("APK Cleanup: failed to delete VFS node $path: ${e.message}")
+                    }
                 }
-            }
+            } catch (_: Exception) {}
         }
 
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
 
-        // BƯỚC 3: Xóa theo kiến trúc lib nếu bật tùy chọn
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
-            val libDir = get("lib")
+            try {
+                val libDir = get("lib")
+                if (libDir.isDirectory) {
+                    val archNames = libDir.list()?.toList() ?: emptyList()
+                    val hasTarget = archNames.contains(archToKeep)
 
-            if (libDir.isDirectory) {
-                val archNames = libDir.list()?.toList() ?: emptyList()
-                val hasTarget = archNames.contains(archToKeep)
-
-                if (hasTarget) {
-                    archNames.filter { it != archToKeep }.forEach { arch ->
-                        try { removeTree("lib/$arch") } catch (_: Exception) {}
+                    if (hasTarget) {
+                        archNames.filter { it != archToKeep }.forEach { arch ->
+                            try { removeTree("lib/$arch") } catch (_: Exception) {}
+                        }
                     }
                 }
-            }
+            } catch (_: Exception) {}
         }
 
         logger.info("APK Cleanup: removed $removedFiles files, freed ${freedBytes / 1024}KB")
