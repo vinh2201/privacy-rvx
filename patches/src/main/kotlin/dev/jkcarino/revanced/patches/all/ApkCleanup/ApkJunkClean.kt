@@ -4,6 +4,7 @@ import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
 import java.io.File
+import java.util.zip.ZipFile
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -63,7 +64,7 @@ val apkCleanupPatch = rawResourcePatch(
         key = "splitByArch",
         default = false,
         title = "Keep Only One Architecture",
-        description = "Keep native libraries (.so files) for only one CPU architecture. To generate separate APKs for each architecture, run this patch multiple times with a different architecture selected each time.",
+        description = "Keep native libraries (.so files) for only one CPU architecture.",
     )
 
     val targetArch by stringOption(
@@ -81,24 +82,19 @@ val apkCleanupPatch = rawResourcePatch(
 
     execute {
         val logger = Logger.getLogger(this::class.java.name)
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
-
         var removedFiles = 0
         var freedBytes = 0L
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
+        fun isJunk(relativePath: String) = JUNK_PATTERNS.any { it.matches(relativePath) }
 
+        // Hàm xóa cây thư mục hệ thống VFS
         fun removeTree(path: String) {
             val entry = get(path)
             if (entry.isDirectory) {
                 val children = entry.list()
-                val preview = children?.take(5)?.joinToString()
-                logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
                 children?.forEach { child -> removeTree("$path/$child") }
-                try {
-                    delete(path)
-                } catch (_: Exception) {}
+                try { delete(path) } catch (_: Exception) {}
             } else if (entry.isFile) {
                 if (isProtected(path)) return
                 val size = entry.length()
@@ -106,75 +102,55 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                     removedFiles++
                     freedBytes += size
-                    logger.info("Removed: $path (${size}B)")
+                    logger.info("Removed tree node: $path (${size}B)")
                 } catch (e: Exception) {
                     logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
                 }
-            } else {
-                logger.info("APK Cleanup: $path -> neither file nor directory")
             }
         }
 
-        // Xóa trực tiếp file rác trên đĩa thư mục root và các nhánh phụ mà Patcher API không index tới
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+        // TỰ ĐỘNG HÓA HOÀN TOÀN: Quét mọi ngóc ngách (bao gồm cả root bị mù) thông qua file APK vật lý
+        val workingDir = File(".")
+        val apkFile = workingDir.listFiles()?.find { it.extension.equals("apk", ignoreCase = true) }
 
-                if (isProtected(relativePath)) return@forEach
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+        if (apkFile != null) {
+            try {
+                ZipFile(apkFile).use { zip ->
+                    val entries = zip.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        if (entry.isDirectory) continue
 
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
-                    val size = file.length()
-                    try {
-                        if (file.delete()) {
-                            removedFiles++
-                            freedBytes += size
-                            logger.info("Removed root/junk file: $relativePath (${size}B)")
-                        } else {
-                            logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
+                        val path = entry.name
+                        if (isProtected(path)) continue
+                        if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) continue
+
+                        if (isJunk(path)) {
+                            val size = entry.size
+                            try {
+                                delete(path)
+                                removedFiles++
+                                freedBytes += if (size >= 0) size else 0L
+                                logger.info("Removed Dynamic Junk: $path (${if (size >= 0) "$size" else "unknown"}B)")
+                            } catch (e: Exception) {
+                                logger.warning("APK Cleanup: failed to delete dynamic junk $path: ${e.message}")
+                            }
                         }
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
                     }
                 }
+            } catch (e: Exception) {
+                logger.warning("APK Cleanup: Failed to inspect physical APK zip: ${e.message}")
             }
-
-        try {
-            removeTree("kotlin")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing kotlin/ folder: ${e.message}")
+        } else {
+            logger.warning("APK Cleanup: Could not locate source APK file in working directory for deep scan.")
         }
 
-        try {
-            removeTree("assets/audience_network.dex")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network.dex: ${e.message}")
-        }
+        // Dọn dẹp thủ công các cụm thư mục rác nặng ký khác
+        try { removeTree("kotlin") } catch (_: Exception) {}
+        try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
+        try { removeTree("assets/audience_network") } catch (_: Exception) {}
 
-        try {
-            removeTree("assets/audience_network")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network/: ${e.message}")
-        }
-
-        try {
-            val metaInf = get("META-INF")
-            if (metaInf.isDirectory) {
-                metaInf.list()?.forEach { name ->
-                    if (name.lowercase() == "services") return@forEach
-                    try {
-                        removeTree("META-INF/$name")
-                    } catch (e: Exception) {
-                        logger.severe("APK Cleanup: failed removing META-INF/$name/: ${e.message}")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed scanning META-INF/: ${e.message}")
-        }
-
+        // Xóa theo kiến trúc lib
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
             val libDir = get("lib")
@@ -185,17 +161,10 @@ val apkCleanupPatch = rawResourcePatch(
 
                 if (hasTarget) {
                     archNames.filter { it != archToKeep }.forEach { arch ->
-                        try {
-                            removeTree("lib/$arch")
-                        } catch (e: Exception) {
-                            logger.severe("APK Cleanup: failed removing lib/$arch/: ${e.message}")
-                        }
+                        try { removeTree("lib/$arch") } catch (_: Exception) {}
                     }
                 } else {
-                    logger.warning(
-                        "APK Cleanup: selected architecture \"$archToKeep\" not found in lib/. " +
-                        "Available: ${archNames.joinToString()}. Keeping all architectures."
-                    )
+                    logger.warning("APK Cleanup: architecture \"$archToKeep\" not found in lib/. Keeping all architectures.")
                 }
             }
         }
