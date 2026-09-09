@@ -106,7 +106,7 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                     removedFiles++
                     freedBytes += size
-                    logger.fine("Removed: $path (${size}B)")
+                    logger.info("Removed: $path (${size}B)")
                 } catch (e: Exception) {
                     logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
                 }
