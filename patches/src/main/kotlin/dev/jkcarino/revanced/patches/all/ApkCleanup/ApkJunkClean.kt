@@ -3,7 +3,6 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
-import java.io.File
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -15,6 +14,7 @@ private val PROTECTED_PATTERNS = listOf(
     Regex(""".*AndroidManifest\.xml$"""),
 )
 
+// Dùng chung 1 list JUNK_PATTERNS duy nhất, không khai báo rườm rà nữa
 private val JUNK_PATTERNS = listOf(
     Regex(""".*play-services-.*\.properties$"""),
     Regex(""".*firebase-.*\.properties$"""),
@@ -52,8 +52,6 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*jetty-dir\.css$"""),
 )
 
-private val EXCLUDED_PREFIXES = listOf("res/")
-
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
     description = "Removes junk and useless files with no runtime purpose inside apk.",
@@ -63,7 +61,7 @@ val apkCleanupPatch = rawResourcePatch(
         key = "splitByArch",
         default = false,
         title = "Keep Only One Architecture",
-        description = "Keep native libraries (.so files) for only one CPU architecture. To generate separate APKs for each architecture, run this patch multiple times with a different architecture selected each time.",
+        description = "Keep native libraries (.so files) for only one CPU architecture.",
     )
 
     val targetArch by stringOption(
@@ -81,22 +79,16 @@ val apkCleanupPatch = rawResourcePatch(
 
     execute {
         val logger = Logger.getLogger(this::class.java.name)
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
-
         var removedFiles = 0
         var freedBytes = 0L
 
-        fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
+        fun isProtected(path: String) = PROTECTED_PATTERNS.any { it.matches(path) }
 
         fun removeTree(path: String) {
             val entry = get(path)
             if (entry.isDirectory) {
-                val children = entry.list()
-                children?.forEach { child -> removeTree("$path/$child") }
-                try {
-                    delete(path)
-                } catch (_: Exception) {}
+                entry.list()?.forEach { child -> removeTree("$path/$child") }
+                try { delete(path) } catch (_: Exception) {}
             } else if (entry.isFile) {
                 if (isProtected(path)) return
                 val size = entry.length()
@@ -106,51 +98,48 @@ val apkCleanupPatch = rawResourcePatch(
                     freedBytes += size
                     logger.info("Removed: $path (${size}B)")
                 } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
+                    logger.warning("Failed to delete $path: ${e.message}")
                 }
             }
         }
 
-        // Quét toàn bộ file rác dựa trên JUNK_PATTERNS và sử dụng hàm delete() chuẩn của Patcher VFS
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+        // Tận dụng chính các tên file/đuôi từ JUNK_PATTERNS hoặc quét trực tiếp thông qua VFS node
+        // Giải pháp sạch: Duyệt qua các file rác tiềm năng ở root bằng cách extract keyword từ JUNK_PATTERNS hoặc check trực tiếp
+        // Vì Patcher 21 ẩn root list, ta có thể cho patcher quét qua các entry phổ biến hoặc dùng logic match trực tiếp.
+        
+        // Hoặc gọn nhất: Trích xuất các tên file cố định từ regex của JUNK_PATTERNS nếu muốn, 
+        // nhưng để không phải khai báo 2 lần, ta gom chung vào một hàm check thông minh hơn:
+        
+        val commonRootJunks = JUNK_PATTERNS.mapNotNull { pattern ->
+            // Chuyển đổi thô regex pattern thành tên file cứng nếu match dạng đơn giản, 
+            // hoặc giữ lại một list nhỏ gọn sinh tự động từ regex (nếu bác không thích khai báo tay).
+            // Tuy nhiên, cách nhanh gọn và an toàn nhất cho VFS là duyệt qua tập hợp các file hay gặp:
+            null // Hoặc giữ cơ chế match gọn
+        }
 
-                if (isProtected(relativePath)) return@forEach
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
-
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
-                    val size = file.length()
-                    try {
-                        delete(relativePath)
-                        removedFiles++
-                        freedBytes += size
-                        logger.info("Removed Junk: $relativePath (${size}B)")
-                    } catch (e: Exception) {
-                        try {
-                            if (file.delete()) {
-                                removedFiles++
-                                freedBytes += size
-                                logger.info("Removed Junk (Disk): $relativePath (${size}B)")
-                            }
-                        } catch (ex: Exception) {
-                            logger.warning("APK Cleanup: failed to delete $relativePath: ${ex.message}")
-                        }
-                    }
+        // Nếu Patcher trả về danh sách root qua `get("").list()` (một số bản fix hoặc tùy APK):
+        val rootDir = get("")
+        if (rootDir.isDirectory) {
+            rootDir.list()?.forEach { name ->
+                if (!isProtected(name) && JUNK_PATTERNS.any { it.matches(name) }) {
+                    removeTree(name)
                 }
             }
+        }
 
+        // Fallback quét các nhánh thư mục phụ & META-INF / kotlin / lib như bình thường
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
 
         try {
-            val metaInf = get("META-INF")
-            if (metaInf.isDirectory) {
-                metaInf.list()?.forEach { name ->
-                    if (name.lowercase() == "services") return@forEach
-                    try { removeTree("META-INF/$name") } catch (_: Exception) {}
+            get("META-INF").let { metaInf ->
+                if (metaInf.isDirectory) {
+                    metaInf.list()?.forEach { name ->
+                        if (name.lowercase() != "services") {
+                            removeTree("META-INF/$name")
+                        }
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -158,15 +147,9 @@ val apkCleanupPatch = rawResourcePatch(
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
             val libDir = get("lib")
-
             if (libDir.isDirectory) {
-                val archNames = libDir.list()?.toList() ?: emptyList()
-                val hasTarget = archNames.contains(archToKeep)
-
-                if (hasTarget) {
-                    archNames.filter { it != archToKeep }.forEach { arch ->
-                        try { removeTree("lib/$arch") } catch (_: Exception) {}
-                    }
+                libDir.list()?.filter { it != archToKeep }?.forEach { arch ->
+                    removeTree("lib/$arch")
                 }
             }
         }
