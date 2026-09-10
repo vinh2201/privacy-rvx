@@ -84,19 +84,17 @@ val apkCleanupPatch = rawResourcePatch(
         var removedFiles = 0
         var freedBytes = 0L
 
-        fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
+        fun isProtected(path: String) = PROTECTED_PATTERNS.any { it.matches(path) }
 
+        // Hàm xóa trọn gói cả thư mục lẫn file thông qua Patcher API
         fun removeTree(path: String) {
             val entry = try { get(path) } catch (_: Exception) { return }
             if (entry.isDirectory) {
-                val children = entry.list()
-                children?.forEach { child ->
+                entry.list()?.forEach { child ->
                     val childPath = if (path.isEmpty()) child else "$path/$child"
                     removeTree(childPath)
                 }
-                try {
-                    delete(path)
-                } catch (_: Exception) {}
+                try { delete(path) } catch (_: Exception) {}
             } else if (entry.isFile) {
                 if (isProtected(path)) return
                 val size = entry.length()
@@ -111,51 +109,39 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét toàn bộ cây thư mục và log chi tiết từng tệp phát hiện được
-        fun inspectAndClean(path: String) {
-            val entry = try { get(path) } catch (e: Exception) {
-                logger.warning("APK Cleanup: cannot get entry for '$path': ${e.message}")
-                return
-            }
+        // Hàm quét đệ quy toàn bộ workspace từ root dựa hoàn toàn vào Patcher API
+        fun scanAndClean(path: String) {
+            val entry = try { get(path) } catch (_: Exception) { return }
 
             if (entry.isDirectory) {
-                val children = entry.list()
-                logger.info("APK Directory [$path]: contains ${children?.size ?: 0} items")
-                children?.forEach { child ->
+                entry.list()?.forEach { child ->
                     val childPath = if (path.isEmpty()) child else "$path/$child"
-                    inspectAndClean(childPath)
+                    scanAndClean(childPath)
                 }
             } else if (entry.isFile) {
-                logger.info("APK File found: $path")
-                if (isProtected(path)) {
-                    logger.info(" -> Skipped (Protected): $path")
-                    return
-                }
-                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) {
-                    logger.info(" -> Skipped (Excluded Prefix): $path")
-                    return
-                }
+                if (isProtected(path)) return
+                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
 
                 if (JUNK_PATTERNS.any { it.matches(path) }) {
                     val size = entry.length()
                     try {
-                        delete(path)
+                        delete(path) // Dùng chính lệnh delete của Patcher
                         removedFiles++
                         freedBytes += size
-                        logger.info("-> Removed Junk: $path (${size}B)")
+                        logger.info("Removed Junk: $path (${size}B)")
                     } catch (e: Exception) {
-                        logger.warning("-> Failed to delete junk $path: ${e.message}")
+                        logger.warning("APK Cleanup: failed to delete junk $path: ${e.message}")
                     }
-                } else {
-                    logger.info(" -> Not matching any JUNK_PATTERN: $path")
                 }
             }
         }
 
-        logger.info("=== STARTING APK INSPECTION & CLEANUP ===")
-        inspectAndClean("")
+        logger.info("=== STARTING PURE PATCHER API JUNK CLEANUP ===")
+        
+        // Quét sạch sẽ từ gốc ("") theo đúng pattern
+        scanAndClean("")
 
-        // Các bước dọn cụm folder truyền thống
+        // Dọn dẹp các cụm thư mục rác đặc thù
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
@@ -186,6 +172,6 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        logger.info("APK Cleanup: removed $removedFiles files, freed ${freedBytes / 1024}KB")
+        logger.info("APK Cleanup: successfully removed $removedFiles files, freed ${freedBytes / 1024}KB")
     }
 }
