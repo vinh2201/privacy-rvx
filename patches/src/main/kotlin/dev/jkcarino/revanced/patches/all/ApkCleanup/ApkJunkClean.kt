@@ -3,12 +3,9 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
-import java.io.File
 import java.util.logging.Logger
 
-private fun isProtectedFile(relativePath: String): Boolean {
-    val name = relativePath.substringAfterLast('/')
-
+private fun isProtectedFile(path: String, name: String): Boolean {
     // 1. Các file cấu hình hệ thống cốt lõi bắt buộc phải giữ
     if (name == "AndroidManifest.xml" || name == "resources.arsc") return true
 
@@ -16,42 +13,45 @@ private fun isProtectedFile(relativePath: String): Boolean {
     if (name.startsWith("classes") && name.endsWith(".dex")) {
         val middle = name.removePrefix("classes").removeSuffix(".dex")
         if (middle.isEmpty() || middle.all { it.isDigit() }) {
-            if (relativePath == name || relativePath == "root/$name") return true
+            if (path == name || path == "root/$name") return true
         }
     }
 
     // 3. Nhóm bảo vệ đặc thù nằm trong thư mục META-INF (Manifest, services, chứng chỉ RSA/SF/DSA/EC)
-    if (relativePath.contains("META-INF/")) {
+    if (path.contains("META-INF/")) {
         if (name == "MANIFEST.MF") return true
-        if (relativePath.contains("META-INF/services/")) return true
+        if (path.contains("META-INF/services/")) return true
         if (name.endsWith(".RSA") || name.endsWith(".SF") || name.endsWith(".DSA") || name.endsWith(".EC")) return true
     }
 
     return false
 }
 
-private fun isJunkFile(relativePath: String): Boolean {
-    val name = relativePath.substringAfterLast('/')
+private fun isJunkFile(path: String, name: String): Boolean {
+    // Không bao giờ quét nhầm sang thư mục res/
+    if (path.startsWith("res/")) return false
 
-    // Thay startsWith thành contains để quét trọn các file có chứa từ khóa bất kể tiền tố rườm rà phía trước
-    if (name.endsWith(".properties") && (
-        name.contains("play-services-") ||
-        name.contains("firebase-") ||
-        name.contains("feature-delivery") ||
-        name.contains("transport-") ||
-        name == "app-update.properties" ||
-        name == "billing.properties" ||
-        name == "billing-ktx.properties" ||
-        name == "review.properties" ||
-        name == "hsdp.properties" ||
-        name == "core-common.properties" ||
-        name == "user-messaging-platform.properties" ||
-        name == "ads-mobile-sdk.properties" ||
-        name == "ion-java.properties" ||
-        name == "version.properties" ||
-        name == "integrity.properties" ||
-        name == "androidannotations-api.properties"
-    )) return true
+    // Quét toàn bộ các file properties rác từ Google Play Services, Firebase, Billing, v.v.
+    if (name.endsWith(".properties")) {
+        if (name.contains("play-services-") ||
+            name.contains("firebase-") ||
+            name.contains("feature-delivery") ||
+            name.contains("transport-") ||
+            name == "app-update.properties" ||
+            name == "billing.properties" ||
+            name == "billing-ktx.properties" ||
+            name == "review.properties" ||
+            name == "hsdp.properties" ||
+            name == "core-common.properties" ||
+            name == "user-messaging-platform.properties" ||
+            name == "ads-mobile-sdk.properties" ||
+            name == "ion-java.properties" ||
+            name == "version.properties" ||
+            name == "integrity.properties" ||
+            name == "androidannotations-api.properties" ||
+            path.contains("META-INF/")
+        ) return true
+    }
 
     if (name.endsWith(".proto")) return true
     if (name.endsWith(".version")) return true
@@ -67,8 +67,9 @@ private fun isJunkFile(relativePath: String): Boolean {
     if (name.endsWith("jetty-dir.css")) return true
     if (name.endsWith("debug.keystore")) return true
     if (name.endsWith("LICENSES")) return true
+    if (name.endsWith(".kotlin_module")) return true
 
-    if (relativePath.contains("META-INF/")) {
+    if (path.contains("META-INF/")) {
         if (name.endsWith("CHANGES")) return true
         if (name.endsWith("README.md")) return true
         if (name.startsWith("NOTICE")) return true
@@ -77,8 +78,6 @@ private fun isJunkFile(relativePath: String): Boolean {
 
     return false
 }
-
-private val EXCLUDED_PREFIXES = listOf("assets/", "res/")
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
@@ -107,82 +106,74 @@ val apkCleanupPatch = rawResourcePatch(
 
     execute {
         val logger = Logger.getLogger(this::class.java.name)
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
-
         var removedFiles = 0
         var freedBytes = 0L
 
-        fun removeTree(path: String) {
-            val entry = get(path)
-            if (entry.isDirectory) {
-                val children = entry.list()
-                children?.forEach { child -> removeTree("$path/$child") }
-                try {
-                    delete(path)
-                } catch (_: Exception) {}
-            } else if (entry.isFile) {
-                if (isProtectedFile(path)) return
-                val size = entry.length()
-                try {
-                    delete(path)
-                    removedFiles++
-                    freedBytes += size
-                    logger.info("Removed: $path (${size}B)")
-                } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
+        // Hàm duyệt cây VFS đệ quy trực tiếp qua ReVanced API (đảm bảo đồng nhất key giữa get và delete)
+        fun scanAndClean(currentPath: String) {
+            try {
+                val dirEntry = get(currentPath)
+                if (!dirEntry.isDirectory) return
+
+                val children = dirEntry.list() ?: return
+                for (childName in children) {
+                    val childPath = if (currentPath.isEmpty()) childName else "$currentPath/$childName"
+                    val entry = get(childPath)
+
+                    if (entry.isDirectory) {
+                        scanAndClean(childPath)
+                        // Tự động dọn sạch thư mục con nếu sau khi xóa file nó trống rỗng
+                        try {
+                            if (entry.list().isNullOrEmpty()) {
+                                delete(childPath)
+                            }
+                        } catch (_: Exception) {}
+                    } else if (entry.isFile) {
+                        if (isProtectedFile(childPath, childName)) continue
+                        if (isJunkFile(childPath, childName)) {
+                            val size = entry.length()
+                            try {
+                                delete(childPath)
+                                removedFiles++
+                                freedBytes += size
+                                logger.info("Removed Junk: $childPath (${size}B)")
+                            } catch (e: Exception) {
+                                logger.warning("APK Cleanup: failed to delete $childPath: ${e.message}")
+                            }
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                logger.warning("APK Cleanup: error scanning $currentPath: ${e.message}")
             }
         }
 
-        apkRoot.walkTopDown()
-            .filter { it.isFile }
-            .toList()
-            .forEach { file ->
-                val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+        // 1. Chạy quét toàn bộ APK từ thư mục gốc VFS ("")
+        scanAndClean("")
 
-                if (isProtectedFile(relativePath)) return@forEach
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
-
-                if (isJunkFile(relativePath)) {
-                    val size = file.length()
-                    
-                    try {
-                        delete(relativePath)
-                    } catch (_: Exception) {}
-
-                    try {
-                        if (file.delete()) {
-                            removedFiles++
-                            freedBytes += size
-                            logger.info("Removed Junk: $relativePath (${size}B)")
-                        }
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to delete $relativePath: ${e.message}")
+        // 2. Dọn dẹp các cụm thư mục/file rác đặc thù cố định
+        fun removeTree(path: String) {
+            try {
+                val entry = get(path)
+                if (entry.isDirectory) {
+                    entry.list()?.forEach { child ->
+                        removeTree("$path/$child")
                     }
                 }
-            }
+                delete(path)
+            } catch (_: Exception) {}
+        }
+
+        try { removeTree("kotlin") } catch (_: Exception) {}
+        try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
+        try { removeTree("assets/audience_network") } catch (_: Exception) {}
 
         try {
-            removeTree("kotlin")
-        } catch (_: Exception) {}
-
-        try {
-            removeTree("assets/audience_network.dex")
-        } catch (_: Exception) {}
-
-        try {
-            removeTree("assets/audience_network")
-        } catch (_: Exception) {}
-
-        try {
-            val METAINF = get("META-INF")
-            if (METAINF.isDirectory) {
-                METAINF.list()?.forEach { name ->
+            val metaInf = get("META-INF")
+            if (metaInf.isDirectory) {
+                metaInf.list()?.forEach { name ->
                     if (name.lowercase() == "services") return@forEach
-                    try {
-                        removeTree("META-INF/$name")
-                    } catch (_: Exception) {}
+                    removeTree("META-INF/$name")
                 }
             }
         } catch (_: Exception) {}
@@ -197,9 +188,7 @@ val apkCleanupPatch = rawResourcePatch(
 
                 if (hasTarget) {
                     archNames.filter { it != archToKeep }.forEach { arch ->
-                        try {
-                            removeTree("lib/$arch")
-                        } catch (_: Exception) {}
+                        try { removeTree("lib/$arch") } catch (_: Exception) {}
                     }
                 }
             }
