@@ -14,7 +14,6 @@ private val PROTECTED_PATTERNS = listOf(
     Regex(""".*AndroidManifest\.xml$"""),
 )
 
-// Dữ nguyên JUNK_PATTERNS của bác, không đụng 1 cọng lông! =))))
 private val JUNK_PATTERNS = listOf(
     Regex(""".*play-services-.*\.properties$"""),
     Regex(""".*firebase-.*\.properties$"""),
@@ -52,41 +51,108 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*jetty-dir\.css$"""),
 )
 
-// ================= LOGIC TÁCH BIẾN VÀ TIỀN TỐ THEO YÊU CẦU =================
-private val JUNK_PREFIXES = listOf("play-services-", "firebase-", "transport-", "ads-")
-private val JUNK_SUFFIXES = listOf(".properties", ".proto", ".version", "_VERSION", ".textproto", ".json", ".css", ".xml")
-private val JUNK_CONTAINS = listOf("feature-delivery", "ion-java")
-// =========================================================================
-
 // Danh sách bắn tỉa trực tiếp cho các file rác nằm ở root
-// LƯU Ý SỐNG CÒN: Tên phải chính xác 100%, không được dùng dấu * ở đây vì hàm get() không hiểu!
+// Đã tích hợp TOÀN BỘ các file trọn bộ hệ sinh thái Google/Firebase
 private val EXACT_ROOT_JUNK = listOf(
-    // Nhóm rác Play Services & Firebase bốc ra từ ảnh của bác
+    // === NHÓM GOOGLE PLAY SERVICES ===
+    "play-services-ads.properties",
+    "play-services-ads-base.properties",
     "play-services-ads-identifier.properties",
+    "play-services-ads-lite.properties",
+    "play-services-analytics.properties",
+    "play-services-analytics-impl.properties",
+    "play-services-appset.properties",
     "play-services-auth.properties",
     "play-services-auth-api-phone.properties",
     "play-services-auth-base.properties",
     "play-services-base.properties",
     "play-services-basement.properties",
+    "play-services-cast.properties",
+    "play-services-cast-framework.properties",
+    "play-services-clearcut.properties",
+    "play-services-cloud-messaging.properties",
+    "play-services-drive.properties",
+    "play-services-fido.properties",
+    "play-services-fitness.properties",
+    "play-services-games.properties",
+    "play-services-gcm.properties",
+    "play-services-identity.properties",
+    "play-services-location.properties",
+    "play-services-maps.properties",
+    "play-services-measurement.properties",
+    "play-services-measurement-api.properties",
+    "play-services-measurement-base.properties",
+    "play-services-measurement-impl.properties",
+    "play-services-measurement-sdk.properties",
+    "play-services-measurement-sdk-api.properties",
+    "play-services-oss-licenses.properties",
+    "play-services-pay.properties",
+    "play-services-places-placereport.properties",
+    "play-services-safetynet.properties",
+    "play-services-stats.properties",
     "play-services-tasks.properties",
+    "play-services-vision.properties",
+    "play-services-vision-common.properties",
+    "play-services-wallet.properties",
+    "play-services-wearable.properties",
+
+    // === NHÓM FIREBASE ===
     "firebase-analytics.properties",
     "firebase-annotations.properties",
-    "firebase-encoders-proto.properties",
+    "firebase-auth.properties",
+    "firebase-auth-interop.properties",
+    "firebase-common.properties",
+    "firebase-components.properties",
+    "firebase-config.properties",
+    "firebase-core.properties",
+    "firebase-crashlytics.properties",
+    "firebase-database.properties",
+    "firebase-datatransport.properties",
+    "firebase-dynamic-links.properties",
     "firebase-encoders.properties",
-    "firebase-iid-interop.properties",
+    "firebase-encoders-proto.properties",
+    "firebase-firestore.properties",
     "firebase-iid.properties",
+    "firebase-iid-interop.properties",
+    "firebase-inappmessaging.properties",
+    "firebase-inappmessaging-display.properties",
+    "firebase-installations.properties",
+    "firebase-installations-interop.properties",
     "firebase-measurement-connector.properties",
+    "firebase-messaging.properties",
+    "firebase-perf.properties",
+    "firebase-storage.properties",
+
+    // === NHÓM TRANSPORT ===
+    "transport-api.properties",
+    "transport-backend-cct.properties",
+    "transport-runtime.properties",
+
+    // === NHÓM RÁC LẺ & PROTO ===
     "client_analytics.proto",
     "messaging_event.proto",
     "messaging_event_extension.proto",
-
-    // Nhóm rác lẻ dập đích danh
-    "app-update.properties", "billing.properties", "billing-ktx.properties", "review.properties", 
-    "hsdp.properties", "core-common.properties", "user-messaging-platform.properties", 
-    "ads-mobile-sdk.properties", "DebugProbesKt.bin", "androidsupportmultidexversion.txt", 
-    "stamp-cert-sha256", "version-control-info.textproto", "kotlin-tooling-metadata.json",
-    "LICENSES", "THIRD-PARTY-NOTICES.txt", "licenses.md", "debug.keystore", 
-    "version.properties", "integrity.properties", "androidannotations-api.properties", "jetty-dir.css"
+    "app-update.properties", 
+    "billing.properties", 
+    "billing-ktx.properties", 
+    "review.properties", 
+    "hsdp.properties", 
+    "core-common.properties", 
+    "user-messaging-platform.properties", 
+    "ads-mobile-sdk.properties", 
+    "DebugProbesKt.bin", 
+    "androidsupportmultidexversion.txt", 
+    "stamp-cert-sha256", 
+    "version-control-info.textproto", 
+    "kotlin-tooling-metadata.json",
+    "LICENSES", 
+    "THIRD-PARTY-NOTICES.txt", 
+    "licenses.md", 
+    "debug.keystore", 
+    "version.properties", 
+    "integrity.properties", 
+    "androidannotations-api.properties", 
+    "jetty-dir.css"
 )
 
 private val EXCLUDED_PREFIXES = listOf("res/")
@@ -146,6 +212,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
+        // 1. Thử quét Root thông qua nhiều định dạng Path khác nhau để debug xem VFS của ReVanced ăn thằng nào
         val rootPaths = listOf("", "/", ".")
         var rootSuccessfullyScanned = false
 
@@ -166,20 +233,15 @@ val apkCleanupPatch = rawResourcePatch(
                                 return@forEach
                             }
 
-                            val nameLower = name.lowercase()
-                            
-                            // Áp dụng logic StartsWith / EndsWith / Contains như bác dặn ở đây!
-                            val isMatchByPrefixSuffix = JUNK_PREFIXES.any { nameLower.startsWith(it) } && JUNK_SUFFIXES.any { nameLower.endsWith(it) }
-                            val isMatchByContains = JUNK_CONTAINS.any { nameLower.contains(it) }
-                            
-                            if (isMatchByPrefixSuffix || isMatchByContains || JUNK_PATTERNS.any { it.matches(name) }) {
+                            if (JUNK_PATTERNS.any { it.matches(name) }) {
                                 try { removeTree(name) } catch (_: Exception) {}
                             }
                         }
-                        break 
+                        break // Quét được rồi thì thoát vòng lặp root
                     }
                 }
             } catch (e: Exception) {
+                // Ignore errors for individual path tests
             }
         }
 
@@ -187,7 +249,7 @@ val apkCleanupPatch = rawResourcePatch(
             logger.warning("APK Cleanup: Could not dynamically list root directory files. Falling back to direct hit targets.")
         }
 
-        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác bằng tên chính xác 100%
+        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác nằm thẳng ở Root (không cần list() thư mục)
         EXACT_ROOT_JUNK.forEach { exactName ->
             val entry = get(exactName)
             if (entry.isFile && !isProtected(exactName)) {
