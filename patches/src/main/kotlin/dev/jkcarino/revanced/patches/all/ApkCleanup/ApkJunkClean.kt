@@ -6,6 +6,8 @@ import app.revanced.patcher.patch.stringOption
 import java.io.File
 import java.util.logging.Logger
 
+private val logger = Logger.getLogger("ApkCleanupPatch")
+
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
     Regex(""".*META-INF/services/.*"""),
@@ -47,7 +49,6 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*_trackers\.xml$"""),
 )
 
-// Danh sách các tên file mục tiêu cần quét thẳng (Direct Target Check) để kiểm tra vị trí chính xác
 private val DIRECT_TARGET_NAMES = setOf(
     "billing.properties",
     "billing-ktx.properties",
@@ -71,7 +72,8 @@ private val DIRECT_TARGET_NAMES = setOf(
     "ads-mobile-sdk.properties"
 )
 
-private val EXCLUDED_PREFIXES = listOf("assets/", "res/")
+// Chỉ loại trừ res/ vì các file junk/properties thường nằm ẩn trong assets/ hoặc root của APK
+private val EXCLUDED_PREFIXES = listOf("res/")
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
@@ -106,7 +108,6 @@ val apkCleanupPatch = rawResourcePatch(
         var removedFiles = 0
         var freedBytes = 0L
 
-        // Danh sách lưu vết để thống kê chi tiết theo yêu cầu
         val regexMatchReports = mutableListOf<String>()
         val directTargetReports = mutableListOf<String>()
 
@@ -138,32 +139,41 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Chuyển sang dùng walkBottomUp kết hợp diagnostic tracking cho ReVanced
         apkRoot.walkBottomUp()
             .forEach { file ->
                 if (file.isFile) {
-                    val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
+                    // Chuẩn hóa đường dẫn sạch sẽ tuyệt đối: bỏ dấu ./ ở đầu, đổi \ thành /, không dính slash thừa
+                    val relativePath = file.relativeTo(apkRoot).path
+                        .replace("\\", "/")
+                        .removePrefix("./")
+                        .removePrefix("/")
                     val fileName = file.name
 
                     if (isProtected(relativePath)) return@forEach
                     if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                    // 1. Kiểm tra quét thẳng tên file (Direct Target Check)
-                    if (DIRECT_TARGET_NAMES.contains(fileName) || DIRECT_TARGET_NAMES.any { relativePath.endsWith("/$it") }) {
+                    // 1. Direct Target Check (Kiểm tra cả tên file đơn thuần hoặc khớp đuôi đường dẫn)
+                    val isDirectMatch = DIRECT_TARGET_NAMES.contains(fileName) || 
+                                        DIRECT_TARGET_NAMES.any { relativePath == it || relativePath.endsWith("/$it") }
+                    
+                    if (isDirectMatch) {
                         directTargetReports.add("Direct Target Found: '$fileName' tại vị trí -> $relativePath")
                     }
 
-                    // 2. Kiểm tra quét bằng JUNK_PATTERNS (Regex Match)
-                    val matchedRegex = JUNK_PATTERNS.firstOrNull { it.matches(relativePath) }
-                    if (matchedRegex != null) {
-                        regexMatchReports.add("Regex Match Found: [Pattern: ${matchedRegex.pattern}] tại vị trí -> $relativePath")
-                        
+                    // 2. Regex Match (Kiểm tra cả relativePath lẫn fileName thuần túy ở root)
+                    val matchedRegex = JUNK_PATTERNS.firstOrNull { it.matches(relativePath) || it.matches(fileName) }
+                    
+                    if (isDirectMatch || matchedRegex != null) {
+                        if (matchedRegex != null && !isDirectMatch) {
+                            regexMatchReports.add("Regex Match Found: [Pattern: ${matchedRegex.pattern}] tại vị trí -> $relativePath")
+                        }
+
                         val size = file.length()
                         try {
                             if (file.delete()) {
                                 removedFiles++
                                 freedBytes += size
-                                logger.info("Removed junk via Regex: $relativePath (${size}B)")
+                                logger.info("Removed junk: $relativePath (${size}B)")
                             } else {
                                 logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
                             }
@@ -172,7 +182,6 @@ val apkCleanupPatch = rawResourcePatch(
                         }
                     }
                 } else if (file.isDirectory && file != apkRoot) {
-                    // Dọn dẹp thư mục trống khi đi từ dưới lên (Bottom-Up)
                     if (file.listFiles()?.isEmpty() == true) {
                         try {
                             file.delete()
@@ -181,7 +190,6 @@ val apkCleanupPatch = rawResourcePatch(
                 }
             }
 
-        // Xuất log tổng kết danh sách vết quét được theo yêu cầu
         logger.info("=== [APK CLEANUP DIAGNOSTIC REPORT] ===")
         logger.info("Tổng số Direct Target quét được: ${directTargetReports.size}")
         directTargetReports.forEach { logger.info("  - $it") }
