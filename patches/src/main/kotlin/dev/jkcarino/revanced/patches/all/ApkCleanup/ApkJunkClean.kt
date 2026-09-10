@@ -87,10 +87,13 @@ val apkCleanupPatch = rawResourcePatch(
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
         fun removeTree(path: String) {
-            val entry = get(path)
+            val entry = try { get(path) } catch (_: Exception) { return }
             if (entry.isDirectory) {
                 val children = entry.list()
-                children?.forEach { child -> removeTree("$path/$child") }
+                children?.forEach { child ->
+                    val childPath = if (path.isEmpty()) child else "$path/$child"
+                    removeTree(childPath)
+                }
                 try {
                     delete(path)
                 } catch (_: Exception) {}
@@ -108,44 +111,42 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // 1. Quét Root thông qua nhiều định dạng Path khác nhau để match với JUNK_PATTERNS
-        val rootPaths = listOf("", "/", ".")
-        var rootSuccessfullyScanned = false
+        // Hàm đệ quy quét toàn bộ cây APK và dọn rác khớp với JUNK_PATTERNS
+        fun cleanJunkRecursive(path: String) {
+            val entry = try { get(path) } catch (_: Exception) { return }
+            if (entry.isDirectory) {
+                entry.list()?.forEach { child ->
+                    val childPath = if (path.isEmpty()) child else "$path/$child"
+                    cleanJunkRecursive(childPath)
+                }
+            } else if (entry.isFile) {
+                if (isProtected(path)) return
+                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
 
-        for (rootPath in rootPaths) {
-            try {
-                val rootDir = get(rootPath)
-                if (rootDir.isDirectory) {
-                    val children = rootDir.list()
-                    if (children != null && children.isNotEmpty()) {
-                        rootSuccessfullyScanned = true
-                        logger.info("APK Cleanup: Successfully listed root using path '$rootPath' (${children.size} entries)")
-                        children.forEach { name ->
-                            if (isProtected(name)) return@forEach
-                            if (EXCLUDED_PREFIXES.any { name.startsWith(it) }) return@forEach
+                // Tránh đụng hàng với các core entries quan trọng
+                val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
+                if (coreEntries.any { path.equals(it, ignoreCase = true) || path.startsWith("$it/") }) {
+                    // Để cho các hàm xử lý chuyên dụng bên dưới lo, hoặc check pattern
+                }
 
-                            val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
-                            if (coreEntries.any { name.equals(it, ignoreCase = true) } || name.matches(Regex("classes\\d*\\.dex"))) {
-                                return@forEach
-                            }
-
-                            if (JUNK_PATTERNS.any { it.matches(name) }) {
-                                try { removeTree(name) } catch (_: Exception) {}
-                            }
-                        }
-                        break
+                if (JUNK_PATTERNS.any { it.matches(path) }) {
+                    val size = entry.length()
+                    try {
+                        delete(path)
+                        removedFiles++
+                        freedBytes += size
+                        logger.info("Removed Junk: $path (${size}B)")
+                    } catch (e: Exception) {
+                        logger.warning("APK Cleanup: failed to delete junk $path: ${e.message}")
                     }
                 }
-            } catch (e: Exception) {
-                // Ignore errors for individual path tests
             }
         }
 
-        if (!rootSuccessfullyScanned) {
-            logger.warning("APK Cleanup: Could not dynamically list root directory files.")
-        }
+        // Thực thi quét toàn APK từ root
+        cleanJunkRecursive("")
 
-        // Các bước xóa cụm quen thuộc
+        // Các bước dọn cụm folder truyền thống
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
@@ -162,9 +163,9 @@ val apkCleanupPatch = rawResourcePatch(
 
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
-            val libDir = get("lib")
+            val libDir = try { get("lib") } catch (_: Exception) { null }
 
-            if (libDir.isDirectory) {
+            if (libDir?.isDirectory == true) {
                 val archNames = libDir.list()?.toList() ?: emptyList()
                 val hasTarget = archNames.contains(archToKeep)
 
