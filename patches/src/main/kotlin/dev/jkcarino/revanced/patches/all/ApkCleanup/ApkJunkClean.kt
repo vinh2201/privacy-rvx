@@ -26,8 +26,6 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*user-messaging-platform\.properties$"""),
     Regex(""".*feature-delivery.*\.properties$"""),
     Regex(""".*ads-mobile-sdk\.properties$"""),
-    Regex(""".*app-metadata\.properties$"""),
-    Regex(""".*\.kotlin_module$"""),
     Regex(""".*\.proto$"""),
     Regex(""".*DebugProbesKt\.bin$"""),
     Regex(""".*\.version$"""),
@@ -46,30 +44,22 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*licenses\.md$"""),
     Regex(""".*debug\.keystore$"""),
     Regex(""".*_trackers\.xml$"""),
+    Regex(""".*version\.properties$"""),
+    Regex(""".*integrity\.properties$"""),
+    Regex(""".*androidannotations-api\.properties$"""),
+    Regex(""".*transport-.*\.properties$"""),
+    Regex(""".*jetty-dir\.css$"""),
 )
 
-private val DIRECT_TARGET_NAMES = setOf(
-    "billing.properties",
-    "billing-ktx.properties",
-    "firebase-analytics.properties",
-    "firebase-annotations.properties",
-    "firebase-encoders-proto.properties",
-    "firebase-encoders.properties",
-    "firebase-iid-interop.properties",
-    "firebase-iid.properties",
-    "firebase-measurement-connector.properties",
-    "client_analytics.proto",
-    "messaging_event.proto",
-    "messaging_event_extension.proto",
-    "DebugProbesKt.bin",
-    "androidsupportmultidexversion.txt",
-    "app-update.properties",
-    "review.properties",
-    "hsdp.properties",
-    "core-common.properties",
-    "user-messaging-platform.properties",
-    "ads-mobile-sdk.properties",
-    "app-metadata.properties"
+// Danh sách bắn tỉa trực tiếp cho các file rác nằm ở root
+private val EXACT_ROOT_JUNK = listOf(
+    "*play-services-*.properties", "*firebase-*.properties", "app-update.properties", "billing.properties",
+    "billing-ktx.properties", "review.properties", "hsdp.properties", "core-common.properties",
+    "user-messaging-platform.properties", "*feature-delivery*.properties", "ads-mobile-sdk.properties",
+    "*.proto", "DebugProbesKt.bin", "*.version",
+    "*_VERSION", "androidsupportmultidexversion.txt", "stamp-cert-sha256", "version-control-info.textproto", "kotlin-tooling-metadata.json",
+    "*LICENSES", "*ion-java.properties", "THIRD-PARTY-NOTICES.txt", "licenses.md", "debug.keystore", "*_trackers.xml",
+    "version.properties", "integrity.properties", "androidannotations-api.properties", "transport-*.properties", "jetty-dir.css"
 )
 
 private val EXCLUDED_PREFIXES = listOf("res/")
@@ -83,7 +73,7 @@ val apkCleanupPatch = rawResourcePatch(
         key = "splitByArch",
         default = false,
         title = "Keep Only One Architecture",
-        description = "Keep native libraries (.so files) for only one CPU architecture.",
+        description = "Keep native libraries (.so files) for only one CPU architecture. To generate separate APKs for each architecture, run this patch multiple times with a different architecture selected each time.",
     )
 
     val targetArch by stringOption(
@@ -105,95 +95,109 @@ val apkCleanupPatch = rawResourcePatch(
         var removedFiles = 0
         var freedBytes = 0L
 
-        val regexMatchReports = mutableListOf<String>()
-        val directTargetReports = mutableListOf<String>()
-
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        // HÀM ĐỆ QUY DUYỆT VÀ GHI NHẬN/XOÁ TRỰC TIẾP QUA PATCHER API
-        fun cleanAndReport(path: String) {
-            val entry = try { get(path) } catch (_: Exception) { return }
+        fun removeTree(path: String) {
+            val entry = get(path)
             if (entry.isDirectory) {
-                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
-                entry.list()?.forEach { child ->
-                    val childPath = if (path.isEmpty()) child else "$path/$child"
-                    cleanAndReport(childPath)
-                }
+                val children = entry.list()
+                children?.forEach { child -> removeTree("$path/$child") }
+                try {
+                    delete(path)
+                } catch (_: Exception) {}
             } else if (entry.isFile) {
-                val relativePath = path
-                val fileName = entry.name ?: path.substringAfterLast('/')
-
-                if (isProtected(relativePath)) return
-                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return
-
-                val isDirectMatch = DIRECT_TARGET_NAMES.contains(fileName) || 
-                                    DIRECT_TARGET_NAMES.any { relativePath == it || relativePath.endsWith("/$it") }
-                
-                if (isDirectMatch) {
-                    directTargetReports.add("Direct Target Found: '$fileName' tại vị trí -> $relativePath")
-                }
-
-                val matchedRegex = JUNK_PATTERNS.firstOrNull { it.matches(relativePath) || it.matches(fileName) }
-                
-                if (isDirectMatch || matchedRegex != null) {
-                    if (matchedRegex != null && !isDirectMatch) {
-                        regexMatchReports.add("Regex Match Found: [Pattern: ${matchedRegex.pattern}] tại vị trí -> $relativePath")
-                    }
-
-                    val size = entry.length()
-                    try {
-                        delete(relativePath)
-                        removedFiles++
-                        freedBytes += size
-                        logger.info("Removed junk: $relativePath (${size}B)")
-                    } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to delete file via patcher api $relativePath: ${e.message}")
-                    }
+                if (isProtected(path)) return
+                val size = entry.length()
+                try {
+                    delete(path)
+                    removedFiles++
+                    freedBytes += size
+                    logger.info("Removed: $path (${size}B)")
+                } catch (e: Exception) {
+                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
                 }
             }
         }
 
-        // Quét toàn bộ workspace bắt đầu từ thư mục gốc ("") để vét sạch từ root xuống các thư mục con
-        try {
-            cleanAndReport("")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed scanning workspace root: ${e.message}")
-        }
+        // 1. Thử quét Root thông qua nhiều định dạng Path khác nhau để debug xem VFS của ReVanced ăn thằng nào
+        val rootPaths = listOf("", "/", ".")
+        var rootSuccessfullyScanned = false
 
-        logger.info("=== [APK CLEANUP DIAGNOSTIC REPORT] ===")
-        logger.info("Tổng số Direct Target quét được: ${directTargetReports.size}")
-        directTargetReports.forEach { logger.info("  - $it") }
-        logger.info("Tổng số Regex Match quét được: ${regexMatchReports.size}")
-        regexMatchReports.forEach { logger.info("  - $it") }
-        logger.info("=======================================")
+        for (rootPath in rootPaths) {
+            try {
+                val rootDir = get(rootPath)
+                if (rootDir.isDirectory) {
+                    val children = rootDir.list()
+                    if (children != null && children.isNotEmpty()) {
+                        rootSuccessfullyScanned = true
+                        logger.info("APK Cleanup: Successfully listed root using path '$rootPath' (${children.size} entries)")
+                        children.forEach { name ->
+                            if (isProtected(name)) return@forEach
+                            if (EXCLUDED_PREFIXES.any { name.startsWith(it) }) return@forEach
 
-        if (splitByArch == true) {
-            val libDir = try { get("lib") } catch (_: Exception) { null }
-            if (libDir != null && libDir.isDirectory) {
-                val archNames = libDir.list()?.toList() ?: emptyList()
-                val archToKeep = if (archNames.contains(targetArch)) targetArch else archNames.firstOrNull() ?: "arm64-v8a"
-                
-                logger.info("APK Cleanup: Arch splitting enabled. Keeping architecture: $archToKeep (Requested: $targetArch, Available: $archNames)")
+                            val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
+                            if (coreEntries.any { name.equals(it, ignoreCase = true) } || name.matches(Regex("classes\\d*\\.dex"))) {
+                                return@forEach
+                            }
 
-                archNames.filter { it != archToKeep }.forEach { arch ->
-                    try {
-                        // Hàm xóa đệ quy thư mục kiến trúc thừa
-                        fun removeTree(p: String) {
-                            val ent = get(p)
-                            if (ent.isDirectory) {
-                                ent.list()?.forEach { removeTree("$p/$it") }
-                                try { delete(p) } catch (_: Exception) {}
-                            } else if (ent.isFile) {
-                                val sz = ent.length()
-                                delete(p)
-                                removedFiles++
-                                freedBytes += sz
+                            if (JUNK_PATTERNS.any { it.matches(name) }) {
+                                try { removeTree(name) } catch (_: Exception) {}
                             }
                         }
-                        removeTree("lib/$arch")
-                        logger.info("Removed unused architecture folder: lib/$arch")
-                    } catch (e: Exception) {
-                        logger.severe("APK Cleanup: failed removing lib/$arch/: ${e.message}")
+                        break // Quét được rồi thì thoát vòng lặp root
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore errors for individual path tests
+            }
+        }
+
+        if (!rootSuccessfullyScanned) {
+            logger.warning("APK Cleanup: Could not dynamically list root directory files. Falling back to direct hit targets.")
+        }
+
+        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác nằm thẳng ở Root (không cần list() thư mục)
+        EXACT_ROOT_JUNK.forEach { exactName ->
+            val entry = get(exactName)
+            if (entry.isFile && !isProtected(exactName)) {
+                val size = entry.length()
+                try {
+                    delete(exactName)
+                    removedFiles++
+                    freedBytes += size
+                    logger.info("Removed Direct Target: $exactName (${size}B)")
+                } catch (e: Exception) {
+                    logger.warning("APK Cleanup: Failed to delete direct target $exactName: ${e.message}")
+                }
+            }
+        }
+
+        // Các bước xóa cụm quen thuộc
+        try { removeTree("kotlin") } catch (_: Exception) {}
+        try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
+        try { removeTree("assets/audience_network") } catch (_: Exception) {}
+
+        try {
+            val metaInf = get("META-INF")
+            if (metaInf.isDirectory) {
+                metaInf.list()?.forEach { name ->
+                    if (name.lowercase() == "services") return@forEach
+                    try { removeTree("META-INF/$name") } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+
+        if (splitByArch == true) {
+            val archToKeep = targetArch ?: "arm64-v8a"
+            val libDir = get("lib")
+
+            if (libDir.isDirectory) {
+                val archNames = libDir.list()?.toList() ?: emptyList()
+                val hasTarget = archNames.contains(archToKeep)
+
+                if (hasTarget) {
+                    archNames.filter { it != archToKeep }.forEach { arch ->
+                        try { removeTree("lib/$arch") } catch (_: Exception) {}
                     }
                 }
             }
