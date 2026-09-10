@@ -9,11 +9,11 @@ private fun isProtectedFile(path: String, name: String): Boolean {
     // 1. Các file cấu hình hệ thống cốt lõi bắt buộc phải giữ
     if (name == "AndroidManifest.xml" || name == "resources.arsc") return true
 
-    // 2. Các file DEX chính (classes.dex, classes2.dex, ...) hỗ trợ cả tiền tố root/
+    // 2. Các file DEX chính (classes.dex, classes2.dex, ...)
     if (name.startsWith("classes") && name.endsWith(".dex")) {
         val middle = name.removePrefix("classes").removeSuffix(".dex")
         if (middle.isEmpty() || middle.all { it.isDigit() }) {
-            if (path == name || path == "root/$name") return true
+            if (path == name || path == "root/$name" || path.endsWith("/$name")) return true
         }
     }
 
@@ -28,31 +28,13 @@ private fun isProtectedFile(path: String, name: String): Boolean {
 }
 
 private fun isJunkFile(path: String, name: String): Boolean {
-    // Không bao giờ quét nhầm sang thư mục res/
-    if (path.startsWith("res/")) return false
+    // Tuyệt đối không quét nhầm thư mục chứa tài nguyên giao diện
+    if (path.startsWith("res/") || path.contains("/res/")) return false
 
-    // Quét toàn bộ các file properties rác từ Google Play Services, Firebase, Billing, v.v.
-    if (name.endsWith(".properties")) {
-        if (name.contains("play-services-") ||
-            name.contains("firebase-") ||
-            name.contains("feature-delivery") ||
-            name.contains("transport-") ||
-            name == "app-update.properties" ||
-            name == "billing.properties" ||
-            name == "billing-ktx.properties" ||
-            name == "review.properties" ||
-            name == "hsdp.properties" ||
-            name == "core-common.properties" ||
-            name == "user-messaging-platform.properties" ||
-            name == "ads-mobile-sdk.properties" ||
-            name == "ion-java.properties" ||
-            name == "version.properties" ||
-            name == "integrity.properties" ||
-            name == "androidannotations-api.properties" ||
-            path.contains("META-INF/")
-        ) return true
-    }
+    // Hốt trọn gói tất cả các file .properties rác bất kể tiền tố rườm rà phía trước
+    if (name.endsWith(".properties")) return true
 
+    // Nhóm các định dạng file rác phổ biến do build toolchain sinh ra
     if (name.endsWith(".proto")) return true
     if (name.endsWith(".version")) return true
     if (name.endsWith("_VERSION")) return true
@@ -69,6 +51,7 @@ private fun isJunkFile(path: String, name: String): Boolean {
     if (name.endsWith("LICENSES")) return true
     if (name.endsWith(".kotlin_module")) return true
 
+    // Rác nằm gọn trong META-INF
     if (path.contains("META-INF/")) {
         if (name.endsWith("CHANGES")) return true
         if (name.endsWith("README.md")) return true
@@ -109,7 +92,25 @@ val apkCleanupPatch = rawResourcePatch(
         var removedFiles = 0
         var freedBytes = 0L
 
-        // Hàm duyệt cây VFS đệ quy trực tiếp qua ReVanced API (đảm bảo đồng nhất key giữa get và delete)
+        // 1. Dò tìm chính xác định dạng root path mà ReVanced VFS đang sử dụng (hỗ trợ cả "", "/", ".")
+        val rootPaths = listOf("", "/", ".")
+        var validRootPath: String? = null
+
+        for (p in rootPaths) {
+            try {
+                val entry = get(p)
+                if (entry.isDirectory) {
+                    val children = entry.list()
+                    if (children != null) {
+                        validRootPath = p
+                        logger.info("APK Cleanup: Successfully resolved root path using '${if (p.isEmpty()) "[empty]" else p}' (${children.size} entries)")
+                        break
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // 2. Hàm đệ quy quét qua toàn bộ cấu trúc VFS dựa trên root path đã tìm thấy
         fun scanAndClean(currentPath: String) {
             try {
                 val dirEntry = get(currentPath)
@@ -117,12 +118,16 @@ val apkCleanupPatch = rawResourcePatch(
 
                 val children = dirEntry.list() ?: return
                 for (childName in children) {
-                    val childPath = if (currentPath.isEmpty()) childName else "$currentPath/$childName"
-                    val entry = get(childPath)
+                    val childPath = if (currentPath.isEmpty() || currentPath == "." || currentPath == "/") {
+                        childName
+                    } else {
+                        "$currentPath/$childName"
+                    }
+
+                    val entry = try { get(childPath) } catch (_: Exception) { continue }
 
                     if (entry.isDirectory) {
                         scanAndClean(childPath)
-                        // Tự động dọn sạch thư mục con nếu sau khi xóa file nó trống rỗng
                         try {
                             if (entry.list().isNullOrEmpty()) {
                                 delete(childPath)
@@ -148,10 +153,14 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // 1. Chạy quét toàn bộ APK từ thư mục gốc VFS ("")
-        scanAndClean("")
+        if (validRootPath != null) {
+            scanAndClean(validRootPath)
+        } else {
+            logger.warning("APK Cleanup: Could not dynamically resolve root path, falling back to default traversal.")
+            scanAndClean("")
+        }
 
-        // 2. Dọn dẹp các cụm thư mục/file rác đặc thù cố định
+        // 3. Dọn dẹp các cụm thư mục/file rác đặc thù cố định theo cấu trúc ReVanced
         fun removeTree(path: String) {
             try {
                 val entry = get(path)
