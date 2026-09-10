@@ -93,7 +93,7 @@ val apkCleanupPatch = rawResourcePatch(
         var freedBytes = 0L
 
         // 1. Dò tìm chính xác định dạng root path mà ReVanced VFS đang sử dụng (hỗ trợ cả "", "/", ".")
-        val rootPaths = listOf("", "/", ".", "//", "\", "\\")
+        val rootPaths = listOf("", "/", ".", "//", "\\", "\\\\")
         var validRootPath: String? = null
 
         for (p in rootPaths) {
