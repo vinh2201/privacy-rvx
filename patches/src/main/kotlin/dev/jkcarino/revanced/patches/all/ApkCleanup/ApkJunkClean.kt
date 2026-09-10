@@ -15,42 +15,56 @@ private val PROTECTED_PATTERNS = listOf(
     Regex(""".*AndroidManifest\.xml$"""),
 )
 
-private val JUNK_PATTERNS = listOf(
-    Regex(""".*play-services-.*\.properties$"""),
-    Regex(""".*firebase-.*\.properties$"""),
-    Regex(""".*app-update\.properties$"""),
-    Regex(""".*billing\.properties$"""),
-    Regex(""".*billing-ktx\.properties$"""),
-    Regex(""".*review\.properties$"""),
-    Regex(""".*hsdp\.properties$"""),
-    Regex(""".*core-common\.properties$"""),
-    Regex(""".*user-messaging-platform\.properties$"""),
-    Regex(""".*feature-delivery.*\.properties$"""),
-    Regex(""".*ads-mobile-sdk\.properties$"""),
-    Regex(""".*\.proto$"""),
-    Regex(""".*DebugProbesKt\.bin$"""),
-    Regex(""".*\.version$"""),
-    Regex(""".*_VERSION$"""),
-    Regex(""".*androidsupportmultidexversion\.txt$"""),
-    Regex(""".*stamp-cert-sha256$"""),
-    Regex(""".*version-control-info\.textproto$"""),
-    Regex(""".*kotlin-tooling-metadata\.json$"""),
-    Regex(""".*META-INF/CHANGES$"""),
-    Regex(""".*META-INF/README\.md$"""),
-    Regex(""".*META-INF/NOTICE.*"""),
-    Regex(""".*META-INF/LICENSE.*"""),
-    Regex(""".*(?:^|/)LICENSES$"""),
-    Regex(""".*ion-java\.properties$"""),
-    Regex(""".*THIRD-PARTY-NOTICES\.txt$"""),
-    Regex(""".*licenses\.md$"""),
-    Regex(""".*debug\.keystore$"""),
-    Regex(""".*_trackers\.xml$"""),
-    Regex(""".*version\.properties$"""),
-    Regex(""".*integrity\.properties$"""),
-    Regex(""".*androidannotations-api\.properties$"""),
-    Regex(""".*transport-.*\.properties$"""),
-    Regex(""".*jetty-dir\.css$"""),
-)
+// Chuyển hóa toàn bộ JUNK_PATTERNS thành hàm kiểm tra tên/đường dẫn tường minh, cực kỳ an toàn và bao quát
+private fun isJunkFile(relativePath: String): Boolean {
+    val name = relativePath.substringAfterLast('/')
+
+    // Gom toàn bộ nhóm file .properties bằng cách kết hợp startsWith và endsWith trực tiếp trong 1 điều kiện
+    if (name.endsWith(".properties") && (
+        name.startsWith("play-services-") ||
+        name.startsWith("firebase-") ||
+        name.startsWith("feature-delivery") ||
+        name.startsWith("transport-") ||
+        name == "app-update.properties" ||
+        name == "billing.properties" ||
+        name == "billing-ktx.properties" ||
+        name == "review.properties" ||
+        name == "hsdp.properties" ||
+        name == "core-common.properties" ||
+        name == "user-messaging-platform.properties" ||
+        name == "ads-mobile-sdk.properties" ||
+        name == "ion-java.properties" ||
+        name == "version.properties" ||
+        name == "integrity.properties" ||
+        name == "androidannotations-api.properties"
+    )) return true
+
+    // Các định dạng đuôi mở rộng tổng quát (endsWith)
+    if (name.endsWith(".proto")) return true
+    if (name.endsWith(".version")) return true
+    if (name.endsWith("_VERSION")) return true
+    if (name.endsWith("_trackers.xml")) return true
+    if (name.endsWith("licenses.md")) return true
+
+    // Các file cụ thể chính xác tên (==)
+    if (name == "DebugProbesKt.bin") return true
+    if (name == "kotlin-tooling-metadata.json") return true
+    if (name == "androidsupportmultidexversion.txt") return true
+    if (name == "stamp-cert-sha256") return true
+    if (name == "version-control-info.textproto") return true
+    if (name == "THIRD-PARTY-NOTICES.txt") return true
+    if (name == "debug.keystore") return true
+    if (name == "jetty-dir.css") return true
+    if (name == "LICENSES") return true
+
+    // Nhóm rác đặc thù nằm bên trong thư mục META-INF
+    if (relativePath.startsWith("META-INF/")) {
+        if (name == "CHANGES" || name == "README.md") return true
+        if (name.startsWith("NOTICE") || name.startsWith("LICENSE")) return true
+    }
+
+    return false
+}
 
 private val EXCLUDED_PREFIXES = listOf("assets/", "res/")
 
@@ -93,8 +107,6 @@ val apkCleanupPatch = rawResourcePatch(
             val entry = get(path)
             if (entry.isDirectory) {
                 val children = entry.list()
-                val preview = children?.take(5)?.joinToString()
-                logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
                 children?.forEach { child -> removeTree("$path/$child") }
                 try {
                     delete(path)
@@ -110,12 +122,10 @@ val apkCleanupPatch = rawResourcePatch(
                 } catch (e: Exception) {
                     logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
                 }
-            } else {
-                logger.info("APK Cleanup: $path -> neither file nor directory")
             }
         }
 
-        // Quét cấu trúc đĩa để lấy relativePath, sau đó gọi Patcher API delete(relativePath) để cập nhật workspace
+        // Quét cấu trúc đĩa và kiểm tra trực tiếp qua hàm isJunkFile siêu tốc
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
@@ -125,48 +135,36 @@ val apkCleanupPatch = rawResourcePatch(
                 if (isProtected(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                if (JUNK_PATTERNS.any { it.matches(relativePath) }) {
+                if (isJunkFile(relativePath)) {
                     val size = file.length()
+                    
                     try {
-                        // Gọi Patcher API delete để workspace đồng bộ trạng thái xóa
                         delete(relativePath)
-                        removedFiles++
-                        freedBytes += size
-                        logger.info("Removed junk via Patcher API: $relativePath (${size}B)")
-                    } catch (e: Exception) {
-                        // Fallback xóa trực tiếp trên đĩa nếu Patcher API không với tới
-                        try {
-                            if (file.delete()) {
-                                removedFiles++
-                                freedBytes += size
-                                logger.info("Removed junk file on disk: $relativePath (${size}B)")
-                            } else {
-                                logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
-                            }
-                        } catch (ex: Exception) {
-                            logger.warning("APK Cleanup: exception deleting file $relativePath: ${ex.message}")
+                    } catch (_: Exception) {}
+
+                    try {
+                        if (file.delete()) {
+                            removedFiles++
+                            freedBytes += size
+                            logger.info("Removed Junk: $relativePath (${size}B)")
                         }
+                    } catch (e: Exception) {
+                        logger.warning("APK Cleanup: failed to delete $relativePath: ${e.message}")
                     }
                 }
             }
 
         try {
             removeTree("kotlin")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing kotlin/ folder: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         try {
             removeTree("assets/audience_network.dex")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network.dex: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         try {
             removeTree("assets/audience_network")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network/: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         try {
             val METAINF = get("META-INF")
@@ -175,14 +173,10 @@ val apkCleanupPatch = rawResourcePatch(
                     if (name.lowercase() == "services") return@forEach
                     try {
                         removeTree("META-INF/$name")
-                    } catch (e: Exception) {
-                        logger.severe("APK Cleanup: failed removing META-INF/$name/: ${e.message}")
-                    }
+                    } catch (_: Exception) {}
                 }
             }
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed scanning META-INF/: ${e.message}")
-        }
+        } catch (_: Exception) {}
 
         if (splitByArch == true) {
             val archToKeep = targetArch ?: "arm64-v8a"
@@ -196,19 +190,12 @@ val apkCleanupPatch = rawResourcePatch(
                     archNames.filter { it != archToKeep }.forEach { arch ->
                         try {
                             removeTree("lib/$arch")
-                        } catch (e: Exception) {
-                            logger.severe("APK Cleanup: failed removing lib/$arch/: ${e.message}")
-                        }
+                        } catch (_: Exception) {}
                     }
-                } else {
-                    logger.warning(
-                        "APK Cleanup: selected architecture \"$archToKeep\" not found in lib/. " +
-                        "Available: ${archNames.joinToString()}. Keeping all architectures."
-                    )
                 }
             }
         }
 
-        logger.info("APK Cleanup: removed $removedFiles files, freed ${freedBytes / 1024}KB")
+        logger.info("APK Cleanup: successfully removed $removedFiles files, freed ${freedBytes / 1024}KB")
     }
 }
