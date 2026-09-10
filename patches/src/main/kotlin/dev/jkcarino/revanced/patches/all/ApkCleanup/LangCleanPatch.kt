@@ -5,8 +5,6 @@ import app.revanced.patcher.patch.stringsOption
 import java.io.File
 import java.util.logging.Logger
 
-private val logger = Logger.getLogger("LangCleanPatch")
-
 private val KNOWN_NON_LANGUAGE_SEGMENTS = setOf("car", "any")
 
 private data class LangQualifier(val lang: String, val region: String?)
@@ -73,6 +71,7 @@ val langCleanPatch = resourcePatch(
     )
 
     execute {
+        val logger = Logger.getLogger(this::class.java.name)
         val resDirRaw = get("res", false)
         val apkRoot = getApkRoot(resDirRaw)
         val resDir = File(apkRoot, "res") // Ép lấy res từ gốc thật
