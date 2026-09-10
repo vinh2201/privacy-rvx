@@ -6,61 +6,72 @@ import app.revanced.patcher.patch.stringOption
 import java.io.File
 import java.util.logging.Logger
 
-private val PROTECTED_PATTERNS = listOf(
-    Regex(""".*META-INF/MANIFEST\.MF$"""),
-    Regex(""".*META-INF/services/.*"""),
-    Regex(""".*META-INF/.*\.(RSA|SF|DSA|EC)$"""),
-    Regex("""^(root/)?classes\d*\.dex$"""),
-    Regex(""".*resources\.arsc$"""),
-    Regex(""".*AndroidManifest\.xml$"""),
-)
+private fun isProtectedFile(relativePath: String): Boolean {
+    val name = relativePath.substringAfterLast('/')
 
-// Chuyển hóa toàn bộ JUNK_PATTERNS thành hàm kiểm tra tên/đường dẫn tường minh, cực kỳ an toàn và bao quát
+    // 1. Các file cấu hình hệ thống cốt lõi bắt buộc phải giữ
+    if (name == "AndroidManifest.xml" || name == "resources.arsc") return true
+
+    // 2. Các file DEX chính (classes.dex, classes2.dex, ...) hỗ trợ cả tiền tố root/
+    if (name.startsWith("classes") && name.endsWith(".dex")) {
+        val middle = name.removePrefix("classes").removeSuffix(".dex")
+        if (middle.isEmpty() || middle.all { it.isDigit() }) {
+            if (relativePath == name || relativePath == "root/$name") return true
+        }
+    }
+
+    // 3. Nhóm bảo vệ đặc thù nằm trong thư mục META-INF (Manifest, services, chứng chỉ RSA/SF/DSA/EC)
+    if (relativePath.contains("META-INF/")) {
+        if (name == "MANIFEST.MF") return true
+        if (relativePath.contains("META-INF/services/")) return true
+        if (name.endsWith(".RSA") || name.endsWith(".SF") || name.endsWith(".DSA") || name.endsWith(".EC")) return true
+    }
+
+    return false
+}
+
 private fun isJunkFile(relativePath: String): Boolean {
     val name = relativePath.substringAfterLast('/')
 
-    // Gom toàn bộ nhóm file .properties bằng cách kết hợp startsWith và endsWith trực tiếp trong 1 điều kiện
     if (name.endsWith(".properties") && (
         name.startsWith("play-services-") ||
         name.startsWith("firebase-") ||
         name.startsWith("feature-delivery") ||
         name.startsWith("transport-") ||
-        name == "app-update.properties" ||
-        name == "billing.properties" ||
-        name == "billing-ktx.properties" ||
-        name == "review.properties" ||
-        name == "hsdp.properties" ||
-        name == "core-common.properties" ||
-        name == "user-messaging-platform.properties" ||
-        name == "ads-mobile-sdk.properties" ||
-        name == "ion-java.properties" ||
-        name == "version.properties" ||
-        name == "integrity.properties" ||
-        name == "androidannotations-api.properties"
+        name.endsWith("app-update.properties") ||
+        name.endsWith("billing.properties") ||
+        name.endsWith("billing-ktx.properties") ||
+        name.endsWith("review.properties") ||
+        name.endsWith("hsdp.properties") ||
+        name.endsWith("core-common.properties") ||
+        name.endsWith("user-messaging-platform.properties") ||
+        name.endsWith("ads-mobile-sdk.properties") ||
+        name.endsWith("ion-java.properties") ||
+        name.endsWith("version.properties") ||
+        name.endsWith("integrity.properties") ||
+        name.endsWith("androidannotations-api.properties")
     )) return true
 
-    // Các định dạng đuôi mở rộng tổng quát (endsWith)
     if (name.endsWith(".proto")) return true
     if (name.endsWith(".version")) return true
     if (name.endsWith("_VERSION")) return true
     if (name.endsWith("_trackers.xml")) return true
+    if (name.endsWith("DebugProbesKt.bin")) return true
+    if (name.endsWith("kotlin-tooling-metadata.json")) return true
+    if (name.endsWith("androidsupportmultidexversion.txt")) return true
+    if (name.endsWith("stamp-cert-sha256")) return true
+    if (name.endsWith("version-control-info.textproto")) return true
+    if (name.endsWith("THIRD-PARTY-NOTICES.txt")) return true
     if (name.endsWith("licenses.md")) return true
+    if (name.endsWith("jetty-dir.css")) return true
+    if (name.endsWith("debug.keystore")) return true
+    if (name.endsWith("LICENSES")) return true
 
-    // Các file cụ thể chính xác tên (==)
-    if (name == "DebugProbesKt.bin") return true
-    if (name == "kotlin-tooling-metadata.json") return true
-    if (name == "androidsupportmultidexversion.txt") return true
-    if (name == "stamp-cert-sha256") return true
-    if (name == "version-control-info.textproto") return true
-    if (name == "THIRD-PARTY-NOTICES.txt") return true
-    if (name == "debug.keystore") return true
-    if (name == "jetty-dir.css") return true
-    if (name == "LICENSES") return true
-
-    // Nhóm rác đặc thù nằm bên trong thư mục META-INF
-    if (relativePath.startsWith("META-INF/")) {
-        if (name == "CHANGES" || name == "README.md") return true
-        if (name.startsWith("NOTICE") || name.startsWith("LICENSE")) return true
+    if (relativePath.contains("META-INF/")) {
+        if (name.endsWith("CHANGES")) return true
+        if (name.endsWith("README.md")) return true
+        if (name.startsWith("NOTICE")) return true
+        if (name.startsWith("LICENSE")) return true
     }
 
     return false
@@ -101,8 +112,6 @@ val apkCleanupPatch = rawResourcePatch(
         var removedFiles = 0
         var freedBytes = 0L
 
-        fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
-
         fun removeTree(path: String) {
             val entry = get(path)
             if (entry.isDirectory) {
@@ -112,7 +121,7 @@ val apkCleanupPatch = rawResourcePatch(
                     delete(path)
                 } catch (_: Exception) {}
             } else if (entry.isFile) {
-                if (isProtected(path)) return
+                if (isProtectedFile(path)) return
                 val size = entry.length()
                 try {
                     delete(path)
@@ -125,14 +134,13 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Quét cấu trúc đĩa và kiểm tra trực tiếp qua hàm isJunkFile siêu tốc
         apkRoot.walkTopDown()
             .filter { it.isFile }
             .toList()
             .forEach { file ->
                 val relativePath = file.relativeTo(apkRoot).path.replace("\\", "/")
 
-                if (isProtected(relativePath)) return@forEach
+                if (isProtectedFile(relativePath)) return@forEach
                 if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
                 if (isJunkFile(relativePath)) {
