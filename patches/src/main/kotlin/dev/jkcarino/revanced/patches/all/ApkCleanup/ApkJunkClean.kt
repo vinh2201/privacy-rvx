@@ -51,8 +51,15 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*jetty-dir\.css$"""),
 )
 
+private val JUNK_DIRECTORY_PREFIXES = listOf(
+    "assets/dexopt/",
+    "com/clevertap/",
+    "org/jacoco/",
+    "org/joda/",
+    "services/",
+)
+
 // Danh sách bắn tỉa trực tiếp cho các file rác nằm ở root
-// Đã tích hợp TOÀN BỘ các file trọn bộ hệ sinh thái Google/Firebase
 private val EXACT_ROOT_JUNK = listOf(
     // === NHÓM GOOGLE PLAY SERVICES ===
     "play-services-ads.properties",
@@ -212,7 +219,6 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // 1. Thử quét Root thông qua nhiều định dạng Path khác nhau để debug xem VFS của ReVanced ăn thằng nào
         val rootPaths = listOf("", "/", ".")
         var rootSuccessfullyScanned = false
 
@@ -237,19 +243,16 @@ val apkCleanupPatch = rawResourcePatch(
                                 try { removeTree(name) } catch (_: Exception) {}
                             }
                         }
-                        break // Quét được rồi thì thoát vòng lặp root
+                        break
                     }
                 }
-            } catch (e: Exception) {
-                // Ignore errors for individual path tests
-            }
+            } catch (e: Exception) {}
         }
 
         if (!rootSuccessfullyScanned) {
             logger.warning("APK Cleanup: Could not dynamically list root directory files. Falling back to direct hit targets.")
         }
 
-        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác nằm thẳng ở Root (không cần list() thư mục)
         EXACT_ROOT_JUNK.forEach { exactName ->
             val entry = get(exactName)
             if (entry.isFile && !isProtected(exactName)) {
@@ -265,10 +268,13 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Các bước xóa cụm quen thuộc
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
+
+        JUNK_DIRECTORY_PREFIXES.forEach { prefix ->
+            try { removeTree(prefix.removeSuffix("/")) } catch (_: Exception) {}
+        }
 
         try {
             val metaInf = get("META-INF")
