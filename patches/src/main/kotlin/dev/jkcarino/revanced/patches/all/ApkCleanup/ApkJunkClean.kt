@@ -172,6 +172,7 @@ val apkCleanupPatch = rawResourcePatch(
                     val size = try { entry.length() } catch (_: Exception) { 0L }
                     freedBytes += size
                     removedFiles++
+                    logger.info("Removed Tree Junk: $path (${size}B)")
                 }
                 delete(path)
             } catch (_: Exception) {}
