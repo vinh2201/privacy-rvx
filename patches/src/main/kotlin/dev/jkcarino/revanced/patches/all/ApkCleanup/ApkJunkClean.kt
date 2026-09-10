@@ -33,23 +33,24 @@ private fun isProtectedFile(relativePath: String): Boolean {
 private fun isJunkFile(relativePath: String): Boolean {
     val name = relativePath.substringAfterLast('/')
 
+    // Thay startsWith thành contains để quét trọn các file có chứa từ khóa bất kể tiền tố rườm rà phía trước
     if (name.endsWith(".properties") && (
-        name.startsWith("play-services-") ||
-        name.startsWith("firebase-") ||
-        name.startsWith("feature-delivery") ||
-        name.startsWith("transport-") ||
-        name.endsWith("app-update.properties") ||
-        name.endsWith("billing.properties") ||
-        name.endsWith("billing-ktx.properties") ||
-        name.endsWith("review.properties") ||
-        name.endsWith("hsdp.properties") ||
-        name.endsWith("core-common.properties") ||
-        name.endsWith("user-messaging-platform.properties") ||
-        name.endsWith("ads-mobile-sdk.properties") ||
-        name.endsWith("ion-java.properties") ||
-        name.endsWith("version.properties") ||
-        name.endsWith("integrity.properties") ||
-        name.endsWith("androidannotations-api.properties")
+        name.contains("play-services-") ||
+        name.contains("firebase-") ||
+        name.contains("feature-delivery") ||
+        name.contains("transport-") ||
+        name == "app-update.properties" ||
+        name == "billing.properties" ||
+        name == "billing-ktx.properties" ||
+        name == "review.properties" ||
+        name == "hsdp.properties" ||
+        name == "core-common.properties" ||
+        name == "user-messaging-platform.properties" ||
+        name == "ads-mobile-sdk.properties" ||
+        name == "ion-java.properties" ||
+        name == "version.properties" ||
+        name == "integrity.properties" ||
+        name == "androidannotations-api.properties"
     )) return true
 
     if (name.endsWith(".proto")) return true
