@@ -92,7 +92,7 @@ val apkCleanupPatch = rawResourcePatch(
         var removedFiles = 0
         var freedBytes = 0L
 
-        // 1. Dò tìm chính xác định dạng root path mà ReVanced VFS đang sử dụng (hỗ trợ cả "", "/", ".")
+        // 1. Dò tìm chính xác định dạng root path mà ReVanced VFS đang sử dụng
         val rootPaths = listOf("", "root/", "/", ".", "//", "\\", "\\\\")
         var validRootPath: String? = null
 
@@ -160,7 +160,7 @@ val apkCleanupPatch = rawResourcePatch(
             scanAndClean("")
         }
 
-        // 3. Dọn dẹp các cụm thư mục/file rác đặc thù cố định theo cấu trúc ReVanced
+        // 3. Dọn dẹp các cụm thư mục/file rác đặc thù cố định (có tích hợp cộng dồn số liệu thống kê)
         fun removeTree(path: String) {
             try {
                 val entry = get(path)
@@ -168,6 +168,10 @@ val apkCleanupPatch = rawResourcePatch(
                     entry.list()?.forEach { child ->
                         removeTree("$path/$child")
                     }
+                } else if (entry.isFile) {
+                    val size = try { entry.length() } catch (_: Exception) { 0L }
+                    freedBytes += size
+                    removedFiles++
                 }
                 delete(path)
             } catch (_: Exception) {}
