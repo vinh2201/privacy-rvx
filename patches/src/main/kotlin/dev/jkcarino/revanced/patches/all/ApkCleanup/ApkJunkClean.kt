@@ -14,6 +14,7 @@ private val PROTECTED_PATTERNS = listOf(
     Regex(""".*AndroidManifest\.xml$"""),
 )
 
+// Dữ nguyên JUNK_PATTERNS của bác, không đụng 1 cọng lông! =))))
 private val JUNK_PATTERNS = listOf(
     Regex(""".*play-services-.*\.properties$"""),
     Regex(""".*firebase-.*\.properties$"""),
@@ -51,15 +52,41 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*jetty-dir\.css$"""),
 )
 
+// ================= LOGIC TÁCH BIẾN VÀ TIỀN TỐ THEO YÊU CẦU =================
+private val JUNK_PREFIXES = listOf("play-services-", "firebase-", "transport-", "ads-")
+private val JUNK_SUFFIXES = listOf(".properties", ".proto", ".version", "_VERSION", ".textproto", ".json", ".css", ".xml")
+private val JUNK_CONTAINS = listOf("feature-delivery", "ion-java")
+// =========================================================================
+
 // Danh sách bắn tỉa trực tiếp cho các file rác nằm ở root
+// LƯU Ý SỐNG CÒN: Tên phải chính xác 100%, không được dùng dấu * ở đây vì hàm get() không hiểu!
 private val EXACT_ROOT_JUNK = listOf(
-    "*play-services-*.properties", "*firebase-*.properties", "app-update.properties", "billing.properties",
-    "billing-ktx.properties", "review.properties", "hsdp.properties", "core-common.properties",
-    "user-messaging-platform.properties", "*feature-delivery*.properties", "ads-mobile-sdk.properties",
-    "*.proto", "DebugProbesKt.bin", "*.version",
-    "*_VERSION", "androidsupportmultidexversion.txt", "stamp-cert-sha256", "version-control-info.textproto", "kotlin-tooling-metadata.json",
-    "*LICENSES", "*ion-java.properties", "THIRD-PARTY-NOTICES.txt", "licenses.md", "debug.keystore", "*_trackers.xml",
-    "version.properties", "integrity.properties", "androidannotations-api.properties", "transport-*.properties", "jetty-dir.css"
+    // Nhóm rác Play Services & Firebase bốc ra từ ảnh của bác
+    "play-services-ads-identifier.properties",
+    "play-services-auth.properties",
+    "play-services-auth-api-phone.properties",
+    "play-services-auth-base.properties",
+    "play-services-base.properties",
+    "play-services-basement.properties",
+    "play-services-tasks.properties",
+    "firebase-analytics.properties",
+    "firebase-annotations.properties",
+    "firebase-encoders-proto.properties",
+    "firebase-encoders.properties",
+    "firebase-iid-interop.properties",
+    "firebase-iid.properties",
+    "firebase-measurement-connector.properties",
+    "client_analytics.proto",
+    "messaging_event.proto",
+    "messaging_event_extension.proto",
+
+    // Nhóm rác lẻ dập đích danh
+    "app-update.properties", "billing.properties", "billing-ktx.properties", "review.properties", 
+    "hsdp.properties", "core-common.properties", "user-messaging-platform.properties", 
+    "ads-mobile-sdk.properties", "DebugProbesKt.bin", "androidsupportmultidexversion.txt", 
+    "stamp-cert-sha256", "version-control-info.textproto", "kotlin-tooling-metadata.json",
+    "LICENSES", "THIRD-PARTY-NOTICES.txt", "licenses.md", "debug.keystore", 
+    "version.properties", "integrity.properties", "androidannotations-api.properties", "jetty-dir.css"
 )
 
 private val EXCLUDED_PREFIXES = listOf("res/")
@@ -119,7 +146,6 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // 1. Thử quét Root thông qua nhiều định dạng Path khác nhau để debug xem VFS của ReVanced ăn thằng nào
         val rootPaths = listOf("", "/", ".")
         var rootSuccessfullyScanned = false
 
@@ -140,15 +166,20 @@ val apkCleanupPatch = rawResourcePatch(
                                 return@forEach
                             }
 
-                            if (JUNK_PATTERNS.any { it.matches(name) }) {
+                            val nameLower = name.lowercase()
+                            
+                            // Áp dụng logic StartsWith / EndsWith / Contains như bác dặn ở đây!
+                            val isMatchByPrefixSuffix = JUNK_PREFIXES.any { nameLower.startsWith(it) } && JUNK_SUFFIXES.any { nameLower.endsWith(it) }
+                            val isMatchByContains = JUNK_CONTAINS.any { nameLower.contains(it) }
+                            
+                            if (isMatchByPrefixSuffix || isMatchByContains || JUNK_PATTERNS.any { it.matches(name) }) {
                                 try { removeTree(name) } catch (_: Exception) {}
                             }
                         }
-                        break // Quét được rồi thì thoát vòng lặp root
+                        break 
                     }
                 }
             } catch (e: Exception) {
-                // Ignore errors for individual path tests
             }
         }
 
@@ -156,7 +187,7 @@ val apkCleanupPatch = rawResourcePatch(
             logger.warning("APK Cleanup: Could not dynamically list root directory files. Falling back to direct hit targets.")
         }
 
-        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác nằm thẳng ở Root (không cần list() thư mục)
+        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác bằng tên chính xác 100%
         EXACT_ROOT_JUNK.forEach { exactName ->
             val entry = get(exactName)
             if (entry.isFile && !isProtected(exactName)) {
