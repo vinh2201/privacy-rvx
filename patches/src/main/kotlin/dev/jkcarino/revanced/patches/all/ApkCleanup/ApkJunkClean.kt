@@ -3,7 +3,6 @@ package dev.jkcarino.revanced.patches.all.apkcleanup
 import app.revanced.patcher.patch.rawResourcePatch
 import app.revanced.patcher.patch.booleanOption
 import app.revanced.patcher.patch.stringOption
-import java.io.File
 import java.util.logging.Logger
 
 private val PROTECTED_PATTERNS = listOf(
@@ -102,8 +101,6 @@ val apkCleanupPatch = rawResourcePatch(
 
     execute {
         val logger = Logger.getLogger(this::class.java.name)
-        val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile
 
         var removedFiles = 0
         var freedBytes = 0L
@@ -113,41 +110,14 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
-        fun removeTree(path: String) {
-            val entry = get(path)
-            if (entry.isDirectory) {
-                val children = entry.list()
-                val preview = children?.take(5)?.joinToString()
-                logger.info("APK Cleanup: $path/ -> ${children?.size ?: -1} entries (e.g. $preview)")
-                children?.forEach { child -> removeTree("$path/$child") }
-                try {
-                    delete(path)
-                } catch (_: Exception) {}
-            } else if (entry.isFile) {
-                if (isProtected(path)) return
-                val size = entry.length()
-                try {
-                    delete(path)
-                    removedFiles++
-                    freedBytes += size
-                    logger.info("Removed: $path (${size}B)")
-                } catch (e: Exception) {
-                    logger.warning("APK Cleanup: failed to delete $path: ${e.message}")
-                }
-            } else {
-                logger.info("APK Cleanup: $path -> neither file nor directory")
-            }
-        }
-
-        // HÀM QUÉT VÀ DỌN DẸP SỬ DỤNG TRỰC TIẾP PATCHER API (THAY CHO WALKBOTTOMUP)
-        fun cleanWorkspace(path: String) {
-            val entry = get(path)
+        // HÀM ĐỆ QUY DUYỆT VÀ GHI NHẬN/XOÁ TRỰC TIẾP QUA PATCHER API
+        fun cleanAndReport(path: String) {
+            val entry = try { get(path) } catch (_: Exception) { return }
             if (entry.isDirectory) {
                 if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
-                val children = entry.list()
-                children?.forEach { child ->
+                entry.list()?.forEach { child ->
                     val childPath = if (path.isEmpty()) child else "$path/$child"
-                    cleanWorkspace(childPath)
+                    cleanAndReport(childPath)
                 }
             } else if (entry.isFile) {
                 val relativePath = path
@@ -183,13 +153,11 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Kích hoạt quét từ root workspace qua danh sách top-level của apkRoot
-        if (apkRoot != null && apkRoot.exists()) {
-            apkRoot.list()?.forEach { topLevelName ->
-                if (topLevelName != "res") {
-                    cleanWorkspace(topLevelName)
-                }
-            }
+        // Quét toàn bộ workspace bắt đầu từ thư mục gốc ("") để vét sạch từ root xuống các thư mục con
+        try {
+            cleanAndReport("")
+        } catch (e: Exception) {
+            logger.severe("APK Cleanup: failed scanning workspace root: ${e.message}")
         }
 
         logger.info("=== [APK CLEANUP DIAGNOSTIC REPORT] ===")
@@ -199,43 +167,9 @@ val apkCleanupPatch = rawResourcePatch(
         regexMatchReports.forEach { logger.info("  - $it") }
         logger.info("=======================================")
 
-        try {
-            removeTree("kotlin")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing kotlin/ folder: ${e.message}")
-        }
-
-        try {
-            removeTree("assets/audience_network.dex")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network.dex: ${e.message}")
-        }
-
-        try {
-            removeTree("assets/audience_network")
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed removing assets/audience_network/: ${e.message}")
-        }
-
-        try {
-            val metaInf = get("META-INF")
-            if (metaInf.isDirectory) {
-                metaInf.list()?.forEach { name ->
-                    if (name.lowercase() == "services") return@forEach
-                    try {
-                        removeTree("META-INF/$name")
-                    } catch (e: Exception) {
-                        logger.severe("APK Cleanup: failed removing META-INF/$name/: ${e.message}")
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            logger.severe("APK Cleanup: failed scanning META-INF/: ${e.message}")
-        }
-
         if (splitByArch == true) {
-            val libDir = get("lib")
-            if (libDir.isDirectory) {
+            val libDir = try { get("lib") } catch (_: Exception) { null }
+            if (libDir != null && libDir.isDirectory) {
                 val archNames = libDir.list()?.toList() ?: emptyList()
                 val archToKeep = if (archNames.contains(targetArch)) targetArch else archNames.firstOrNull() ?: "arm64-v8a"
                 
@@ -243,6 +177,19 @@ val apkCleanupPatch = rawResourcePatch(
 
                 archNames.filter { it != archToKeep }.forEach { arch ->
                     try {
+                        // Hàm xóa đệ quy thư mục kiến trúc thừa
+                        fun removeTree(p: String) {
+                            val ent = get(p)
+                            if (ent.isDirectory) {
+                                ent.list()?.forEach { removeTree("$p/$it") }
+                                try { delete(p) } catch (_: Exception) {}
+                            } else if (ent.isFile) {
+                                val sz = ent.length()
+                                delete(p)
+                                removedFiles++
+                                freedBytes += sz
+                            }
+                        }
                         removeTree("lib/$arch")
                         logger.info("Removed unused architecture folder: lib/$arch")
                     } catch (e: Exception) {
