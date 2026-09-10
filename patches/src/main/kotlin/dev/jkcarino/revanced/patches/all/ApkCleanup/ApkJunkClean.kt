@@ -111,22 +111,29 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // Hàm đệ quy quét toàn bộ cây APK và dọn rác khớp với JUNK_PATTERNS
-        fun cleanJunkRecursive(path: String) {
-            val entry = try { get(path) } catch (_: Exception) { return }
+        // Quét toàn bộ cây thư mục và log chi tiết từng tệp phát hiện được
+        fun inspectAndClean(path: String) {
+            val entry = try { get(path) } catch (e: Exception) {
+                logger.warning("APK Cleanup: cannot get entry for '$path': ${e.message}")
+                return
+            }
+
             if (entry.isDirectory) {
-                entry.list()?.forEach { child ->
+                val children = entry.list()
+                logger.info("APK Directory [$path]: contains ${children?.size ?: 0} items")
+                children?.forEach { child ->
                     val childPath = if (path.isEmpty()) child else "$path/$child"
-                    cleanJunkRecursive(childPath)
+                    inspectAndClean(childPath)
                 }
             } else if (entry.isFile) {
-                if (isProtected(path)) return
-                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
-
-                // Tránh đụng hàng với các core entries quan trọng
-                val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
-                if (coreEntries.any { path.equals(it, ignoreCase = true) || path.startsWith("$it/") }) {
-                    // Để cho các hàm xử lý chuyên dụng bên dưới lo, hoặc check pattern
+                logger.info("APK File found: $path")
+                if (isProtected(path)) {
+                    logger.info(" -> Skipped (Protected): $path")
+                    return
+                }
+                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) {
+                    logger.info(" -> Skipped (Excluded Prefix): $path")
+                    return
                 }
 
                 if (JUNK_PATTERNS.any { it.matches(path) }) {
@@ -135,16 +142,18 @@ val apkCleanupPatch = rawResourcePatch(
                         delete(path)
                         removedFiles++
                         freedBytes += size
-                        logger.info("Removed Junk: $path (${size}B)")
+                        logger.info("-> Removed Junk: $path (${size}B)")
                     } catch (e: Exception) {
-                        logger.warning("APK Cleanup: failed to delete junk $path: ${e.message}")
+                        logger.warning("-> Failed to delete junk $path: ${e.message}")
                     }
+                } else {
+                    logger.info(" -> Not matching any JUNK_PATTERN: $path")
                 }
             }
         }
 
-        // Thực thi quét toàn APK từ root
-        cleanJunkRecursive("")
+        logger.info("=== STARTING APK INSPECTION & CLEANUP ===")
+        inspectAndClean("")
 
         // Các bước dọn cụm folder truyền thống
         try { removeTree("kotlin") } catch (_: Exception) {}
