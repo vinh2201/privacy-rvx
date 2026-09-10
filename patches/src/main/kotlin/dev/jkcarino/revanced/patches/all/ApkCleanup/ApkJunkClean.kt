@@ -108,7 +108,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        // 1. Thử quét Root thông qua nhiều định dạng Path khác nhau để debug xem VFS của ReVanced ăn thằng nào
+        // 1. Quét Root thông qua nhiều định dạng Path khác nhau để match với JUNK_PATTERNS
         val rootPaths = listOf("", "/", ".")
         var rootSuccessfullyScanned = false
 
@@ -133,7 +133,7 @@ val apkCleanupPatch = rawResourcePatch(
                                 try { removeTree(name) } catch (_: Exception) {}
                             }
                         }
-                        break // Quét được rồi thì thoát vòng lặp root
+                        break
                     }
                 }
             } catch (e: Exception) {
@@ -142,23 +142,7 @@ val apkCleanupPatch = rawResourcePatch(
         }
 
         if (!rootSuccessfullyScanned) {
-            logger.warning("APK Cleanup: Could not dynamically list root directory files. Falling back to direct hit targets.")
-        }
-
-        // 2. Fallback "Bắn Tỉa Trực Tiếp" các file rác nằm thẳng ở Root (không cần list() thư mục)
-        JUNK_PATTERNS.forEach { exactName ->
-            val entry = get(exactName)
-            if (entry.isFile && !isProtected(exactName)) {
-                val size = entry.length()
-                try {
-                    delete(exactName)
-                    removedFiles++
-                    freedBytes += size
-                    logger.info("Removed Direct Target: $exactName (${size}B)")
-                } catch (e: Exception) {
-                    logger.warning("APK Cleanup: Failed to delete direct target $exactName: ${e.message}")
-                }
-            }
+            logger.warning("APK Cleanup: Could not dynamically list root directory files.")
         }
 
         // Các bước xóa cụm quen thuộc
