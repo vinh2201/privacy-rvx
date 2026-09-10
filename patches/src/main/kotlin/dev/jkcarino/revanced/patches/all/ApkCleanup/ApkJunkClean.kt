@@ -6,8 +6,6 @@ import app.revanced.patcher.patch.stringOption
 import java.io.File
 import java.util.logging.Logger
 
-private val logger = Logger.getLogger("ApkCleanupPatch")
-
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
     Regex(""".*META-INF/services/.*"""),
@@ -29,6 +27,8 @@ private val JUNK_PATTERNS = listOf(
     Regex(""".*user-messaging-platform\.properties$"""),
     Regex(""".*feature-delivery.*\.properties$"""),
     Regex(""".*ads-mobile-sdk\.properties$"""),
+    Regex(""".*app-metadata\.properties$"""),
+    Regex(""".*\.kotlin_module$"""),
     Regex(""".*\.proto$"""),
     Regex(""".*DebugProbesKt\.bin$"""),
     Regex(""".*\.version$"""),
@@ -69,10 +69,10 @@ private val DIRECT_TARGET_NAMES = setOf(
     "hsdp.properties",
     "core-common.properties",
     "user-messaging-platform.properties",
-    "ads-mobile-sdk.properties"
+    "ads-mobile-sdk.properties",
+    "app-metadata.properties"
 )
 
-// Chỉ loại trừ res/ vì các file junk/properties thường nằm ẩn trong assets/ hoặc root của APK
 private val EXCLUDED_PREFIXES = listOf("res/")
 
 val apkCleanupPatch = rawResourcePatch(
@@ -84,7 +84,7 @@ val apkCleanupPatch = rawResourcePatch(
         key = "splitByArch",
         default = false,
         title = "Keep Only One Architecture",
-        description = "Keep native libraries (.so files) for only one CPU architecture. To generate separate APKs for each architecture, run this patch multiple times with a different architecture selected each time.",
+        description = "Keep native libraries (.so files) for only one CPU architecture.",
     )
 
     val targetArch by stringOption(
@@ -142,7 +142,6 @@ val apkCleanupPatch = rawResourcePatch(
         apkRoot.walkBottomUp()
             .forEach { file ->
                 if (file.isFile) {
-                    // Chuẩn hóa đường dẫn sạch sẽ tuyệt đối: bỏ dấu ./ ở đầu, đổi \ thành /, không dính slash thừa
                     val relativePath = file.relativeTo(apkRoot).path
                         .replace("\\", "/")
                         .removePrefix("./")
@@ -152,7 +151,6 @@ val apkCleanupPatch = rawResourcePatch(
                     if (isProtected(relativePath)) return@forEach
                     if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
 
-                    // 1. Direct Target Check (Kiểm tra cả tên file đơn thuần hoặc khớp đuôi đường dẫn)
                     val isDirectMatch = DIRECT_TARGET_NAMES.contains(fileName) || 
                                         DIRECT_TARGET_NAMES.any { relativePath == it || relativePath.endsWith("/$it") }
                     
@@ -160,7 +158,6 @@ val apkCleanupPatch = rawResourcePatch(
                         directTargetReports.add("Direct Target Found: '$fileName' tại vị trí -> $relativePath")
                     }
 
-                    // 2. Regex Match (Kiểm tra cả relativePath lẫn fileName thuần túy ở root)
                     val matchedRegex = JUNK_PATTERNS.firstOrNull { it.matches(relativePath) || it.matches(fileName) }
                     
                     if (isDirectMatch || matchedRegex != null) {
@@ -170,15 +167,13 @@ val apkCleanupPatch = rawResourcePatch(
 
                         val size = file.length()
                         try {
-                            if (file.delete()) {
-                                removedFiles++
-                                freedBytes += size
-                                logger.info("Removed junk: $relativePath (${size}B)")
-                            } else {
-                                logger.warning("APK Cleanup: failed to delete file on disk: $relativePath")
-                            }
+                            // DÙNG HÀM DELETE CỦA REVANCED PATCHER THAY CHO FILE.DELETE()
+                            delete(relativePath)
+                            removedFiles++
+                            freedBytes += size
+                            logger.info("Removed junk: $relativePath (${size}B)")
                         } catch (e: Exception) {
-                            logger.warning("APK Cleanup: exception deleting file $relativePath: ${e.message}")
+                            logger.warning("APK Cleanup: failed to delete file via patcher api $relativePath: ${e.message}")
                         }
                     }
                 } else if (file.isDirectory && file != apkRoot) {
@@ -232,26 +227,20 @@ val apkCleanupPatch = rawResourcePatch(
         }
 
         if (splitByArch == true) {
-            val archToKeep = targetArch ?: "arm64-v8a"
             val libDir = get("lib")
-
             if (libDir.isDirectory) {
                 val archNames = libDir.list()?.toList() ?: emptyList()
-                val hasTarget = archNames.contains(archToKeep)
+                val archToKeep = if (archNames.contains(targetArch)) targetArch else archNames.firstOrNull() ?: "arm64-v8a"
+                
+                logger.info("APK Cleanup: Arch splitting enabled. Keeping architecture: $archToKeep (Requested: $targetArch, Available: $archNames)")
 
-                if (hasTarget) {
-                    archNames.filter { it != archToKeep }.forEach { arch ->
-                        try {
-                            removeTree("lib/$arch")
-                        } catch (e: Exception) {
-                            logger.severe("APK Cleanup: failed removing lib/$arch/: ${e.message}")
-                        }
+                archNames.filter { it != archToKeep }.forEach { arch ->
+                    try {
+                        removeTree("lib/$arch")
+                        logger.info("Removed unused architecture folder: lib/$arch")
+                    } catch (e: Exception) {
+                        logger.severe("APK Cleanup: failed removing lib/$arch/: ${e.message}")
                     }
-                } else {
-                    logger.warning(
-                        "APK Cleanup: selected architecture \"$archToKeep\" not found in lib/. " +
-                        "Available: ${archNames.joinToString()}. Keeping all architectures."
-                    )
                 }
             }
         }
