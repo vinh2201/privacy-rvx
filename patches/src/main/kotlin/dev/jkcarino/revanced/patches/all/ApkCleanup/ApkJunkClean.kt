@@ -6,8 +6,6 @@ import app.revanced.patcher.patch.stringOption
 import java.io.File
 import java.util.logging.Logger
 
-private val logger = Logger.getLogger("ApkCleanupPatch")
-
 private val PROTECTED_PATTERNS = listOf(
     Regex(""".*META-INF/MANIFEST\.MF$"""),
     Regex(""".*META-INF/services/.*"""),
