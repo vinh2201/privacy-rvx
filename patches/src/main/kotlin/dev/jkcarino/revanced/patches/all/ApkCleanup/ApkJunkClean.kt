@@ -103,7 +103,7 @@ val apkCleanupPatch = rawResourcePatch(
     execute {
         val logger = Logger.getLogger(this::class.java.name)
         val manifestFile = get("AndroidManifest.xml")
-        val apkRoot = manifestFile.parentFile ?: File(".")
+        val apkRoot = manifestFile.parentFile
 
         var removedFiles = 0
         var freedBytes = 0L
@@ -139,51 +139,58 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
-        apkRoot.walkBottomUp()
-            .forEach { file ->
-                if (file.isFile) {
-                    val relativePath = file.relativeTo(apkRoot).path
-                        .replace("\\", "/")
-                        .removePrefix("./")
-                        .removePrefix("/")
-                    val fileName = file.name
+        // HÀM QUÉT VÀ DỌN DẸP SỬ DỤNG TRỰC TIẾP PATCHER API (THAY CHO WALKBOTTOMUP)
+        fun cleanWorkspace(path: String) {
+            val entry = get(path)
+            if (entry.isDirectory) {
+                if (EXCLUDED_PREFIXES.any { path.startsWith(it) }) return
+                val children = entry.list()
+                children?.forEach { child ->
+                    val childPath = if (path.isEmpty()) child else "$path/$child"
+                    cleanWorkspace(childPath)
+                }
+            } else if (entry.isFile) {
+                val relativePath = path
+                val fileName = entry.name ?: path.substringAfterLast('/')
 
-                    if (isProtected(relativePath)) return@forEach
-                    if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return@forEach
+                if (isProtected(relativePath)) return
+                if (EXCLUDED_PREFIXES.any { relativePath.startsWith(it) }) return
 
-                    val isDirectMatch = DIRECT_TARGET_NAMES.contains(fileName) || 
-                                        DIRECT_TARGET_NAMES.any { relativePath == it || relativePath.endsWith("/$it") }
-                    
-                    if (isDirectMatch) {
-                        directTargetReports.add("Direct Target Found: '$fileName' tại vị trí -> $relativePath")
+                val isDirectMatch = DIRECT_TARGET_NAMES.contains(fileName) || 
+                                    DIRECT_TARGET_NAMES.any { relativePath == it || relativePath.endsWith("/$it") }
+                
+                if (isDirectMatch) {
+                    directTargetReports.add("Direct Target Found: '$fileName' tại vị trí -> $relativePath")
+                }
+
+                val matchedRegex = JUNK_PATTERNS.firstOrNull { it.matches(relativePath) || it.matches(fileName) }
+                
+                if (isDirectMatch || matchedRegex != null) {
+                    if (matchedRegex != null && !isDirectMatch) {
+                        regexMatchReports.add("Regex Match Found: [Pattern: ${matchedRegex.pattern}] tại vị trí -> $relativePath")
                     }
 
-                    val matchedRegex = JUNK_PATTERNS.firstOrNull { it.matches(relativePath) || it.matches(fileName) }
-                    
-                    if (isDirectMatch || matchedRegex != null) {
-                        if (matchedRegex != null && !isDirectMatch) {
-                            regexMatchReports.add("Regex Match Found: [Pattern: ${matchedRegex.pattern}] tại vị trí -> $relativePath")
-                        }
-
-                        val size = file.length()
-                        try {
-                            // DÙNG HÀM DELETE CỦA REVANCED PATCHER THAY CHO FILE.DELETE()
-                            delete(relativePath)
-                            removedFiles++
-                            freedBytes += size
-                            logger.info("Removed junk: $relativePath (${size}B)")
-                        } catch (e: Exception) {
-                            logger.warning("APK Cleanup: failed to delete file via patcher api $relativePath: ${e.message}")
-                        }
-                    }
-                } else if (file.isDirectory && file != apkRoot) {
-                    if (file.listFiles()?.isEmpty() == true) {
-                        try {
-                            file.delete()
-                        } catch (_: Exception) {}
+                    val size = entry.length()
+                    try {
+                        delete(relativePath)
+                        removedFiles++
+                        freedBytes += size
+                        logger.info("Removed junk: $relativePath (${size}B)")
+                    } catch (e: Exception) {
+                        logger.warning("APK Cleanup: failed to delete file via patcher api $relativePath: ${e.message}")
                     }
                 }
             }
+        }
+
+        // Kích hoạt quét từ root workspace qua danh sách top-level của apkRoot
+        if (apkRoot != null && apkRoot.exists()) {
+            apkRoot.list()?.forEach { topLevelName ->
+                if (topLevelName != "res") {
+                    cleanWorkspace(topLevelName)
+                }
+            }
+        }
 
         logger.info("=== [APK CLEANUP DIAGNOSTIC REPORT] ===")
         logger.info("Tổng số Direct Target quét được: ${directTargetReports.size}")
