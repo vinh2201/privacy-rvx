@@ -59,6 +59,41 @@ private val JUNK_DIRECTORY_PREFIXES = listOf(
     "services/",
 )
 
+// === DANH SÁCH THÊM MỚI ===
+private val EXCLUDED_ROOT_CALLS = listOf(
+    // === NHÓM GOOGLE PLAY SERVICES ===
+    "play-services-auth.properties",
+    "play-services-auth-api-phone.properties",
+    "play-services-auth-base.properties",
+    "play-services-base.properties",
+    "play-services-cloud-messaging.properties",
+    "play-services-gcm.properties",
+    "play-services-tasks.properties",
+
+    // === NHÓM FIREBASE ===
+    "firebase-auth.properties",
+    "firebase-auth-interop.properties",
+    "firebase-common.properties",
+    "firebase-components.properties",
+    "firebase-core.properties",
+    "firebase-database.properties",
+    "firebase-datatransport.properties",
+    "firebase-inappmessaging.properties",
+    "firebase-inappmessaging-display.properties",
+    "firebase-messaging.properties",
+
+    // === NHÓM KHÁC ===
+    "core-common.properties",
+    "META-INF/androidx.compose.ui_ui.version",
+    "androidannotations-api.properties",
+    "jetty-dir.css"
+)
+
+private val PACKAGE_NAME = listOf(
+    "com.viber.voip", "com.facebook.orca", "com.whatsapp", "com.zing.zalo"
+)
+// =========================
+
 // Danh sách bắn tỉa trực tiếp cho các file rác nằm ở root
 private val EXACT_ROOT_JUNK = listOf(
     // === NHÓM GOOGLE PLAY SERVICES ===
@@ -192,6 +227,13 @@ val apkCleanupPatch = rawResourcePatch(
     execute {
         val logger = Logger.getLogger(this::class.java.name)
 
+        // Kiểm tra xem app đang patch có nằm trong danh sách cần loại trừ không
+        val currentPackage = context.packageName
+        val isExcludedApp = PACKAGE_NAME.contains(currentPackage)
+        if (isExcludedApp) {
+            logger.info("APK Cleanup: Detected protected package ($currentPackage). Applying EXCLUDED_ROOT_CALLS rules.")
+        }
+
         var removedFiles = 0
         var freedBytes = 0L
 
@@ -234,6 +276,11 @@ val apkCleanupPatch = rawResourcePatch(
                             if (isProtected(name)) return@forEach
                             if (EXCLUDED_PREFIXES.any { name.startsWith(it) }) return@forEach
 
+                            // Rule mới: Bỏ qua nếu app nằm trong PACKAGE_NAME và file nằm trong EXCLUDED_ROOT_CALLS
+                            if (isExcludedApp && EXCLUDED_ROOT_CALLS.contains(name)) {
+                                return@forEach
+                            }
+
                             val coreEntries = listOf("META-INF", "lib", "assets", "kotlin", "res", "AndroidManifest.xml")
                             if (coreEntries.any { name.equals(it, ignoreCase = true) } || name.matches(Regex("classes\\d*\\.dex"))) {
                                 return@forEach
@@ -256,6 +303,11 @@ val apkCleanupPatch = rawResourcePatch(
         EXACT_ROOT_JUNK.forEach { exactName ->
             val entry = get(exactName)
             if (entry.isFile && !isProtected(exactName)) {
+                // Rule mới: Kiểm tra danh sách loại trừ đối với direct hits
+                if (isExcludedApp && EXCLUDED_ROOT_CALLS.contains(exactName)) {
+                    return@forEach
+                }
+
                 val size = entry.length()
                 try {
                     delete(exactName)
