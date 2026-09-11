@@ -255,6 +255,10 @@ val apkCleanupPatch = rawResourcePatch(
             logger.warning("APK Cleanup: Failed to verify package from raw Manifest - ${e.message}")
         }
 
+        if (isExcludedApp) {
+            logger.info("APK Cleanup: Detected protected package ($detectedPackage). Applying EXCLUDED_ROOT_CALLS rules.")
+        }
+
         //==================================================
 
         var removedFiles = 0
