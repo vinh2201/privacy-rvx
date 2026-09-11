@@ -59,7 +59,9 @@ private val JUNK_DIRECTORY_PREFIXES = listOf(
     "services/",
 )
 
+// === DANH SÁCH THÊM MỚI ===
 private val EXCLUDED_ROOT_CALLS = listOf(
+    // === NHÓM GOOGLE PLAY SERVICES ===
     "play-services-auth.properties",
     "play-services-auth-api-phone.properties",
     "play-services-auth-base.properties",
@@ -67,6 +69,8 @@ private val EXCLUDED_ROOT_CALLS = listOf(
     "play-services-cloud-messaging.properties",
     "play-services-gcm.properties",
     "play-services-tasks.properties",
+
+    // === NHÓM FIREBASE ===
     "firebase-auth.properties",
     "firebase-auth-interop.properties",
     "firebase-common.properties",
@@ -77,6 +81,8 @@ private val EXCLUDED_ROOT_CALLS = listOf(
     "firebase-inappmessaging.properties",
     "firebase-inappmessaging-display.properties",
     "firebase-messaging.properties",
+
+    // === NHÓM KHÁC ===
     "core-common.properties",
     "META-INF/androidx.compose.ui_ui.version",
     "androidannotations-api.properties",
@@ -86,8 +92,11 @@ private val EXCLUDED_ROOT_CALLS = listOf(
 private val PACKAGE_NAME = listOf(
     "com.viber.voip", "com.facebook.orca", "com.whatsapp", "com.zing.zalo"
 )
+// =========================
 
+// Danh sách bắn tỉa trực tiếp cho các file rác nằm ở root
 private val EXACT_ROOT_JUNK = listOf(
+    // === NHÓM GOOGLE PLAY SERVICES ===
     "play-services-ads.properties",
     "play-services-ads-base.properties",
     "play-services-ads-identifier.properties",
@@ -128,6 +137,8 @@ private val EXACT_ROOT_JUNK = listOf(
     "play-services-vision-common.properties",
     "play-services-wallet.properties",
     "play-services-wearable.properties",
+
+    // === NHÓM FIREBASE ===
     "firebase-analytics.properties",
     "firebase-annotations.properties",
     "firebase-auth.properties",
@@ -153,9 +164,13 @@ private val EXACT_ROOT_JUNK = listOf(
     "firebase-messaging.properties",
     "firebase-perf.properties",
     "firebase-storage.properties",
+
+    // === NHÓM TRANSPORT ===
     "transport-api.properties",
     "transport-backend-cct.properties",
     "transport-runtime.properties",
+
+    // === NHÓM RÁC LẺ & PROTO ===
     "client_analytics.proto",
     "messaging_event.proto",
     "messaging_event_extension.proto",
@@ -183,88 +198,6 @@ private val EXACT_ROOT_JUNK = listOf(
 )
 
 private val EXCLUDED_PREFIXES = listOf("res/")
-
-private fun getApkPackageName(bytes: ByteArray): String? {
-    try {
-        if (bytes.size < 8) return null
-        fun readInt(b: ByteArray, offset: Int): Int {
-            if (offset + 4 > b.size) return 0
-            return ((b[offset].toInt() and 0xFF)) or
-                   ((b[offset + 1].toInt() and 0xFF) shl 8) or
-                   ((b[offset + 2].toInt() and 0xFF) shl 16) or
-                   ((b[offset + 3].toInt() and 0xFF) shl 24)
-        }
-
-        var offset = 0
-        val magic = readInt(bytes, offset)
-        if (magic != 0x00080003) return null
-        offset += 8
-
-        while (offset < bytes.size) {
-            val chunkType = readInt(bytes, offset)
-            val chunkSize = readInt(bytes, offset + 4)
-            if (chunkSize <= 0 || offset + chunkSize > bytes.size) break
-
-            // RES_STRING_POOL_TYPE
-            if (chunkType == 0x001C0001) {
-                val stringCount = readInt(bytes, offset + 8)
-                val stringsStart = offset + readInt(bytes, offset + 20)
-                val flags = readInt(bytes, offset + 16)
-                val isUtf8 = (flags and 0x100) != 0
-
-                val stringOffsets = IntArray(stringCount)
-                for (i in 0 until stringCount) {
-                    stringOffsets[i] = readInt(bytes, offset + 28 + i * 4)
-                }
-
-                for (i in 0 until stringCount) {
-                    val strOffset = stringsStart + stringOffsets[i]
-                    if (strOffset >= bytes.size) continue
-
-                    val str = if (isUtf8) {
-                        var curr = strOffset
-                        val len1 = bytes[curr].toInt() and 0xFF
-                        curr += if ((len1 and 0x80) != 0) 2 else 1
-                        val sb = StringBuilder()
-                        while (curr < bytes.size && bytes[curr] != 0.toByte()) {
-                            sb.append(bytes[curr].toInt().toChar())
-                            curr++
-                        }
-                        sb.toString()
-                    } else {
-                        var curr = strOffset
-                        val charLen = if (curr + 2 <= bytes.size && (readInt(bytes, curr) and 0xFFFF) < 0x8000) {
-                            val l = readInt(bytes, curr) and 0xFFFF
-                            curr += 2
-                            l
-                        } else {
-                            val l = readInt(bytes, curr)
-                            curr += 4
-                            l
-                        }
-                        val sb = StringBuilder()
-                        for (c in 0 until charLen) {
-                            if (curr + 2 > bytes.size) break
-                            val code = (bytes[curr].toInt() and 0xFF) or ((bytes[curr + 1].toInt() and 0xFF) shl 8)
-                            if (code == 0) break
-                            sb.append(code.toChar())
-                            curr += 2
-                        }
-                        sb.toString()
-                    }
-
-                    // Kiểm tra xem string trong pool có khớp với package list của mình không
-                    if (PACKAGE_NAME.contains(str)) {
-                        return str
-                    }
-                }
-            }
-            offset += chunkSize
-        }
-    } catch (e: Exception) {
-    }
-    return null
-}
 
 val apkCleanupPatch = rawResourcePatch(
     name = "APK Junk Cleanup",
@@ -294,6 +227,7 @@ val apkCleanupPatch = rawResourcePatch(
     execute {
         val logger = Logger.getLogger(this::class.java.name)
 
+        // === KIỂM TRA PACKAGE CHÍNH XÁC TRONG MANIFEST ===
         var isExcludedApp = false
         var detectedPackage = "unknown"
         
@@ -301,29 +235,34 @@ val apkCleanupPatch = rawResourcePatch(
             val manifestFile = get("AndroidManifest.xml")
             if (manifestFile.isFile) {
                 val rawBytes = manifestFile.readBytes()
-                val pkgName = getApkPackageName(rawBytes)
-                if (pkgName != null) {
-                    detectedPackage = pkgName
-                    if (PACKAGE_NAME.contains(pkgName)) {
+                val strUtf8 = String(rawBytes, Charsets.UTF_8)
+                val strUtf16 = String(rawBytes, Charsets.UTF_16LE)
+                
+                for (pkg in PACKAGE_NAME) {
+                    // Check chính xác khai báo package chính hoặc các định danh đặc trưng thay vì contains lỏng lẻo
+                    val exactPackagePattern = Regex("package=[\"']$pkg[\"']")
+                    val receiverPattern = Regex("android:name=[\"']$pkg")
+                    
+                    if (exactPackagePattern.containsMatchIn(strUtf8) || exactPackagePattern.containsMatchIn(strUtf16) ||
+                        receiverPattern.containsMatchIn(strUtf8) || receiverPattern.containsMatchIn(strUtf16)) {
                         isExcludedApp = true
+                        detectedPackage = pkg
+                        break
                     }
                 }
             }
         } catch (e: Exception) {
-            logger.warning("APK Cleanup: Failed to verify package from Manifest - ${e.message}")
+            logger.warning("APK Cleanup: Failed to verify package from raw Manifest - ${e.message}")
         }
 
-        if (isExcludedApp) {
-            logger.info("APK Cleanup: Detected protected package ($detectedPackage). Applying EXCLUDED_ROOT_CALLS rules.")
-        } else {
-            logger.info("APK Cleanup: Detected package ($detectedPackage). Running normal cleanup.")
-        }
+        //==================================================
 
         var removedFiles = 0
         var freedBytes = 0L
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
+        // Đưa trực tiếp điều kiện kiểm tra EXCLUDED_ROOT_CALLS vào removeTree
         fun removeTree(path: String) {
             if (isExcludedApp && EXCLUDED_ROOT_CALLS.contains(path)) return
 
@@ -405,6 +344,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
+        // Tự động được bảo vệ bởi EXCLUDED_ROOT_CALLS thông qua hàm removeTree đã tích hợp kiểm tra
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
@@ -413,6 +353,7 @@ val apkCleanupPatch = rawResourcePatch(
             try { removeTree(prefix.removeSuffix("/")) } catch (_: Exception) {}
         }
 
+        // Vòng lặp META-INF gọi removeTree sẽ tự động kiểm tra path đầy đủ (ví dụ: META-INF/androidx.compose.ui_ui.version)
         try {
             val metaInf = get("META-INF")
             if (metaInf.isDirectory) {
