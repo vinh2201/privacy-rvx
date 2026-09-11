@@ -227,7 +227,7 @@ val apkCleanupPatch = rawResourcePatch(
     execute {
         val logger = Logger.getLogger(this::class.java.name)
 
-        // === KIỂM TRA PACKAGE CHÍNH XÁC TRONG MANIFEST ===
+        // === KIỂM TRA PACKAGE CHÍNH XÁC Ở ĐẦU MANIFEST ===
         var isExcludedApp = false
         var detectedPackage = "unknown"
         
@@ -236,18 +236,20 @@ val apkCleanupPatch = rawResourcePatch(
             if (manifestFile.isFile) {
                 val rawBytes = manifestFile.readBytes()
                 val strUtf8 = String(rawBytes, Charsets.UTF_8)
-                val strUtf16 = String(rawBytes, Charsets.UTF_16LE)
+                // Đảm bảo không nổ lỗi encoding, ưu tiên chuỗi có chứa "<manifest"
+                val text = if (strUtf8.contains("<manifest")) strUtf8 else String(rawBytes, Charsets.UTF_16LE)
                 
-                for (pkg in PACKAGE_NAME) {
-                    // Check chính xác khai báo package chính hoặc các định danh đặc trưng thay vì contains lỏng lẻo
-                    val exactPackagePattern = Regex("package=[\"']$pkg[\"']")
-                    val receiverPattern = Regex("android:name=[\"']$pkg")
-                    
-                    if (exactPackagePattern.containsMatchIn(strUtf8) || exactPackagePattern.containsMatchIn(strUtf16) ||
-                        receiverPattern.containsMatchIn(strUtf8) || receiverPattern.containsMatchIn(strUtf16)) {
-                        isExcludedApp = true
-                        detectedPackage = pkg
-                        break
+                // Chỉ lấy 5 dòng đầu tiên để tóm đúng dòng thứ 2 chứa <manifest, bỏ qua toàn bộ rác bên dưới
+                val topLines = text.lines().take(5)
+                val manifestLine = topLines.find { it.contains("<manifest") }
+                
+                if (manifestLine != null) {
+                    for (pkg in PACKAGE_NAME) {
+                        if (manifestLine.contains("package=\"$pkg\"") || manifestLine.contains("package='$pkg'")) {
+                            isExcludedApp = true
+                            detectedPackage = pkg
+                            break
+                        }
                     }
                 }
             }
