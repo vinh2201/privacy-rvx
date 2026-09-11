@@ -227,12 +227,37 @@ val apkCleanupPatch = rawResourcePatch(
     execute {
         val logger = Logger.getLogger(this::class.java.name)
 
-        // Kiểm tra xem app đang patch có nằm trong danh sách cần loại trừ không
-        val currentPackage = context.packageName
-        val isExcludedApp = PACKAGE_NAME.contains(currentPackage)
-        if (isExcludedApp) {
-            logger.info("APK Cleanup: Detected protected package ($currentPackage). Applying EXCLUDED_ROOT_CALLS rules.")
+        // === KIỂM TRA PACKAGE BẰNG CÁCH ĐỌC XUYÊN RAW MANIFEST ===
+        var isExcludedApp = false
+        var detectedPackage = "unknown"
+        
+        try {
+            val manifestFile = get("AndroidManifest.xml")
+            if (manifestFile.isFile) {
+                // Đọc toàn bộ file nhị phân thành mảng byte
+                val rawBytes = manifestFile.readBytes()
+                
+                // String Pool của file AXML có thể được Android build ở định dạng UTF-8 hoặc UTF-16LE. Mình hứng luôn cả 2 để bắt trọn ổ:
+                val strUtf8 = String(rawBytes, Charsets.UTF_8)
+                val strUtf16 = String(rawBytes, Charsets.UTF_16LE)
+                
+                for (pkg in PACKAGE_NAME) {
+                    // Mặc kệ các ký tự rác nhị phân, chuỗi package name vẫn luôn có thể tìm thấy
+                    if (strUtf8.contains(pkg) || strUtf16.contains(pkg)) {
+                        isExcludedApp = true
+                        detectedPackage = pkg
+                        break
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger.warning("APK Cleanup: Failed to verify package from raw Manifest - ${e.message}")
         }
+
+        if (isExcludedApp) {
+            logger.info("APK Cleanup: Detected protected package ($detectedPackage). Applying EXCLUDED_ROOT_CALLS rules.")
+        }
+        // =========================================================
 
         var removedFiles = 0
         var freedBytes = 0L
