@@ -200,14 +200,12 @@ private fun getApkPackageName(bytes: ByteArray): String? {
         if (magic != 0x00080003) return null
         offset += 8
 
-        var stringPoolStrings: List<String> = emptyList()
-        var packageStringIndex = -1
-
         while (offset < bytes.size) {
             val chunkType = readInt(bytes, offset)
             val chunkSize = readInt(bytes, offset + 4)
             if (chunkSize <= 0 || offset + chunkSize > bytes.size) break
 
+            // RES_STRING_POOL_TYPE
             if (chunkType == 0x001C0001) {
                 val stringCount = readInt(bytes, offset + 8)
                 val stringsStart = offset + readInt(bytes, offset + 20)
@@ -219,14 +217,11 @@ private fun getApkPackageName(bytes: ByteArray): String? {
                     stringOffsets[i] = readInt(bytes, offset + 28 + i * 4)
                 }
 
-                val strings = mutableListOf<String>()
                 for (i in 0 until stringCount) {
                     val strOffset = stringsStart + stringOffsets[i]
-                    if (strOffset >= bytes.size) {
-                        strings.add("")
-                        continue
-                    }
-                    if (isUtf8) {
+                    if (strOffset >= bytes.size) continue
+
+                    val str = if (isUtf8) {
                         var curr = strOffset
                         val len1 = bytes[curr].toInt() and 0xFF
                         curr += if ((len1 and 0x80) != 0) 2 else 1
@@ -235,11 +230,7 @@ private fun getApkPackageName(bytes: ByteArray): String? {
                             sb.append(bytes[curr].toInt().toChar())
                             curr++
                         }
-                        val str = sb.toString()
-                        strings.add(str)
-                        if (str == "package") {
-                            packageStringIndex = i
-                        }
+                        sb.toString()
                     } else {
                         var curr = strOffset
                         val charLen = if (curr + 2 <= bytes.size && (readInt(bytes, curr) and 0xFFFF) < 0x8000) {
@@ -251,7 +242,6 @@ private fun getApkPackageName(bytes: ByteArray): String? {
                             curr += 4
                             l
                         }
-                        
                         val sb = StringBuilder()
                         for (c in 0 until charLen) {
                             if (curr + 2 > bytes.size) break
@@ -260,33 +250,16 @@ private fun getApkPackageName(bytes: ByteArray): String? {
                             sb.append(code.toChar())
                             curr += 2
                         }
-                        val str = sb.toString()
-                        strings.add(str)
-                        if (str == "package") {
-                            packageStringIndex = i
-                        }
+                        sb.toString()
+                    }
+
+                    // Kiểm tra xem string trong pool có khớp với package list của mình không
+                    if (PACKAGE_NAME.contains(str)) {
+                        return str
                     }
                 }
-                stringPoolStrings = strings
             }
             offset += chunkSize
-        }
-
-        if (packageStringIndex != -1 && stringPoolStrings.isNotEmpty()) {
-            var scanOffset = 0
-            while (scanOffset + 20 <= bytes.size) {
-                val nameIdx = readInt(bytes, scanOffset + 4)
-                if (nameIdx == packageStringIndex) {
-                    val dataIdx = readInt(bytes, scanOffset + 16)
-                    if (dataIdx >= 0 && dataIdx < stringPoolStrings.size) {
-                        val candidate = stringPoolStrings[dataIdx]
-                        if (candidate.contains(".") && !candidate.contains(" ")) {
-                            return candidate
-                        }
-                    }
-                }
-                scanOffset += 4
-            }
         }
     } catch (e: Exception) {
     }
