@@ -234,15 +234,11 @@ val apkCleanupPatch = rawResourcePatch(
         try {
             val manifestFile = get("AndroidManifest.xml")
             if (manifestFile.isFile) {
-                // Đọc toàn bộ file nhị phân thành mảng byte
                 val rawBytes = manifestFile.readBytes()
-                
-                // String Pool của file AXML có thể được Android build ở định dạng UTF-8 hoặc UTF-16LE. Mình hứng luôn cả 2 để bắt trọn ổ:
                 val strUtf8 = String(rawBytes, Charsets.UTF_8)
                 val strUtf16 = String(rawBytes, Charsets.UTF_16LE)
                 
                 for (pkg in PACKAGE_NAME) {
-                    // Mặc kệ các ký tự rác nhị phân, chuỗi package name vẫn luôn có thể tìm thấy
                     if (strUtf8.contains(pkg) || strUtf16.contains(pkg)) {
                         isExcludedApp = true
                         detectedPackage = pkg
@@ -264,7 +260,10 @@ val apkCleanupPatch = rawResourcePatch(
 
         fun isProtected(relativePath: String) = PROTECTED_PATTERNS.any { it.matches(relativePath) }
 
+        // Đưa trực tiếp điều kiện kiểm tra EXCLUDED_ROOT_CALLS vào removeTree
         fun removeTree(path: String) {
+            if (isExcludedApp && EXCLUDED_ROOT_CALLS.contains(path)) return
+
             val entry = get(path)
             if (entry.isDirectory) {
                 val children = entry.list()
@@ -301,7 +300,6 @@ val apkCleanupPatch = rawResourcePatch(
                             if (isProtected(name)) return@forEach
                             if (EXCLUDED_PREFIXES.any { name.startsWith(it) }) return@forEach
 
-                            // Rule mới: Bỏ qua nếu app nằm trong PACKAGE_NAME và file nằm trong EXCLUDED_ROOT_CALLS
                             if (isExcludedApp && EXCLUDED_ROOT_CALLS.contains(name)) {
                                 return@forEach
                             }
@@ -328,7 +326,6 @@ val apkCleanupPatch = rawResourcePatch(
         EXACT_ROOT_JUNK.forEach { exactName ->
             val entry = get(exactName)
             if (entry.isFile && !isProtected(exactName)) {
-                // Rule mới: Kiểm tra danh sách loại trừ đối với direct hits
                 if (isExcludedApp && EXCLUDED_ROOT_CALLS.contains(exactName)) {
                     return@forEach
                 }
@@ -345,6 +342,7 @@ val apkCleanupPatch = rawResourcePatch(
             }
         }
 
+        // Tự động được bảo vệ bởi EXCLUDED_ROOT_CALLS thông qua hàm removeTree đã tích hợp kiểm tra
         try { removeTree("kotlin") } catch (_: Exception) {}
         try { removeTree("assets/audience_network.dex") } catch (_: Exception) {}
         try { removeTree("assets/audience_network") } catch (_: Exception) {}
@@ -353,6 +351,7 @@ val apkCleanupPatch = rawResourcePatch(
             try { removeTree(prefix.removeSuffix("/")) } catch (_: Exception) {}
         }
 
+        // Vòng lặp META-INF gọi removeTree sẽ tự động kiểm tra path đầy đủ (ví dụ: META-INF/androidx.compose.ui_ui.version)
         try {
             val metaInf = get("META-INF")
             if (metaInf.isDirectory) {
