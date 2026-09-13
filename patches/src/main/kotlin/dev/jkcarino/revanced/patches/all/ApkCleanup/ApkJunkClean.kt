@@ -176,6 +176,8 @@ private val EXACT_ROOT_JUNK = listOf(
 
     // === BỔ SUNG CÁC MỤC BỊ SÓT SO VỚI REGEX LIST ===
     "ion-java.properties",
+    "feature-delivery.properties",
+    "feature-delivery-base.properties"
     "facebook_trackers.xml",
     "google_trackers.xml",
     "firebase_trackers.xml",
@@ -204,6 +206,7 @@ private val EXACT_ROOT_JUNK = listOf(
     "version.properties", 
     "integrity.properties", 
     "androidannotations-api.properties", 
+    "jetty-dir.css",
     "tv-ads.properties"
 )
 
