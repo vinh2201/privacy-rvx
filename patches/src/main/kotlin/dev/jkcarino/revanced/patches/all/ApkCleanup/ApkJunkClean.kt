@@ -86,7 +86,9 @@ private val EXCLUDED_ROOT_CALLS = listOf(
     "core-common.properties",
     "META-INF/androidx.compose.ui_ui.version",
     "androidannotations-api.properties",
-    "jetty-dir.css"
+    "jetty-dir.css",
+    "feature-delivery.properties",
+    "feature-delivery-base.properties"
 )
 
 private val PACKAGE_NAME = listOf(
@@ -139,6 +141,8 @@ private val EXACT_ROOT_JUNK = listOf(
     "play-services-wearable.properties",
 
     // === NHÓM FIREBASE ===
+    "firebase/perf/v1/perf_metric.proto",
+    "firebase-ads.properties",
     "firebase-analytics.properties",
     "firebase-annotations.properties",
     "firebase-auth.properties",
@@ -170,6 +174,12 @@ private val EXACT_ROOT_JUNK = listOf(
     "transport-backend-cct.properties",
     "transport-runtime.properties",
 
+    // === BỔ SUNG CÁC MỤC BỊ SÓT SO VỚI REGEX LIST ===
+    "ion-java.properties",
+    "facebook_trackers.xml",
+    "google_trackers.xml",
+    "firebase_trackers.xml",
+
     // === NHÓM RÁC LẺ & PROTO ===
     "client_analytics.proto",
     "messaging_event.proto",
@@ -194,7 +204,7 @@ private val EXACT_ROOT_JUNK = listOf(
     "version.properties", 
     "integrity.properties", 
     "androidannotations-api.properties", 
-    "jetty-dir.css"
+    "tv-ads.properties"
 )
 
 private val EXCLUDED_PREFIXES = listOf("res/")
