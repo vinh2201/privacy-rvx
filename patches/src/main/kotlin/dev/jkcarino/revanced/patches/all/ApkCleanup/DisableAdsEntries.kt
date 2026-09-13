@@ -19,13 +19,21 @@ val removeAdManifestEntriesPatch = resourcePatch(
     execute {
         document("AndroidManifest.xml").use { doc ->
             val adPermissions = setOf(
+                "com.android.vending.CHECK_LICENSE",
                 "com.google.android.gms.permission.AD_ID",
                 "android.permission.ACCESS_ADSERVICES_ATTRIBUTION",
                 "android.permission.ACCESS_ADSERVICES_AD_ID",
                 "android.permission.ACCESS_ADSERVICES_TOPICS",
                 "android.permission.ACCESS_ADSERVICES_CUSTOM_AUDIENCE",
                 "android.permission.AD_SERVICES_CONFIG",
+                "android.permission.BLUETOOTH_ADVERTISE",
+                "android.permission.CHANGE_NETWORK_STATE",
+                "android.permission.CHANGE_WIFI_STATE",
+                "android.permission.DETECT_SCREEN_CAPTURE",
+                "android.permission.DETECT_SCREEN_RECORDING",
                 "android.permission.KILL_BACKGROUND_PROCESSES",
+                "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+                "android.permission.RUN_USER_INITIATED_JOBS",
             )
             val adNames = listOf(
                 "com.google.android.gms.ads",
